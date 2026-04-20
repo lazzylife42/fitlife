@@ -1,0 +1,35 @@
+services:
+  fitlife-backend:
+    build: ./backend
+    container_name: fitlife-backend
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      APP_TOKEN: ${APP_TOKEN}
+      DB_PATH: /data/fitlife.db
+      CORS_ORIGINS: https://fit.sabinomonte.ch
+      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
+      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
+      STRAVA_REDIRECT_URI: https://fit.sabinomonte.ch/api/strava/callback
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: https://fit.sabinomonte.ch/api/google/callback
+    volumes:
+      - fitlife-data:/data
+    expose:
+      - "5000"
+
+  fitlife-frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_APP_TOKEN: ${APP_TOKEN}
+    container_name: fitlife-frontend
+    restart: unless-stopped
+    ports:
+      - "3010:80"
+    depends_on:
+      - fitlife-backend
+
+volumes:
+  fitlife-data:
