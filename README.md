@@ -74,4 +74,3 @@ docker exec fitlife-backend sqlite3 /data/fitlife.db
 # ou supprimer le volume :
 docker compose down -v && docker compose up -d --build
 ```
-# fitlife

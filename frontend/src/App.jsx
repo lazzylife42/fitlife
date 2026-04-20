@@ -256,10 +256,13 @@ export default function App() {
               <Row label="Km cette semaine" value={`${kmWeek} / 10 km`} />
               {stravaData && (
                 <div style={{ marginTop: 8 }}>
-                  {stravaData.activities.slice(0, 3).map(a => (
-                    <div key={a.id} style={{ fontSize: 12, color: 'var(--c-text-2)', padding: '4px 0', borderTop: '0.5px solid var(--c-border)', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{new Date(a.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' })} — {a.name}</span>
-                      <span style={{ fontWeight: 500, color: 'var(--c-text)' }}>{a.distance_km}km {a.avg_hr ? `· ${Math.round(a.avg_hr)}bpm` : ''}</span>
+                  {stravaData.activities.slice(0, 5).map(a => (
+                    <div key={a.id} style={{ fontSize: 12, padding: '5px 0', borderTop: '0.5px solid var(--c-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--c-text-2)' }}>
+                        <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 20, background: a.type === 'Run' ? 'var(--teal-light)' : 'var(--c-bg-2)', color: a.type === 'Run' ? 'var(--teal)' : 'var(--c-text-3)', fontWeight: 500 }}>{a.type === 'Run' ? 'Course' : 'Marche'}</span>
+                        {new Date(a.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' })} — {a.name}
+                      </span>
+                      <span style={{ fontWeight: 500, color: 'var(--c-text)', whiteSpace: 'nowrap', marginLeft: 8 }}>{a.distance_km}km {a.avg_hr ? `· ${Math.round(a.avg_hr)}bpm` : ''}</span>
                     </div>
                   ))}
                 </div>

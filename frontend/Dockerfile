@@ -3,6 +3,8 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install
 COPY . .
+ARG VITE_APP_TOKEN
+ENV VITE_APP_TOKEN=$VITE_APP_TOKEN
 RUN npm run build
 
 FROM nginx:alpine

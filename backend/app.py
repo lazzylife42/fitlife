@@ -32,6 +32,8 @@ APP_TOKEN = os.environ.get('APP_TOKEN')
 if not APP_TOKEN:
     raise ValueError("APP_TOKEN env var is required")
 
+init_db()
+
 
 # --- DB ---
 
@@ -291,7 +293,7 @@ def strava_activities():
         }
         for a in activities if a['sport_type'] in ('Run', 'Walk')
     ]
-    total_km = round(sum(r['distance_km'] for r in runs), 2)
+    total_km = round(sum(r['distance_km'] for r in runs if r['type'] == 'Run'), 2)
     return jsonify({'activities': runs, 'total_km_week': total_km})
 
 
