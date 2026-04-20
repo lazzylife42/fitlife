@@ -35,6 +35,13 @@ const MUSCU = {
   ],
 }
 
+const RANGES = [
+  { label: '7j', days: 7 },
+  { label: '1m', days: 30 },
+  { label: '3m', days: 90 },
+  { label: '1an', days: 365 },
+]
+
 function getWeekNum() {
   const d = new Date()
   d.setHours(0, 0, 0, 0)
@@ -42,12 +49,90 @@ function getWeekNum() {
   const w = new Date(d.getFullYear(), 0, 4)
   return Math.round(((d - w) / 86400000 - 3 + ((w.getDay() + 6) % 7)) / 7)
 }
-
 function getYear() { return new Date().getFullYear() }
 
 const todayIdx = (new Date().getDay() + 6) % 7
 const weekNum = getWeekNum()
 const year = getYear()
+
+// Filtre logs par nb de jours, garde la dernière entrée par jour, retourne [{date, value}] trié ASC
+function filterLogs(logs, days) {
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - days)
+  const byDay = {}
+  ;(logs || [])
+    .filter(l => new Date(l.date) >= cutoff)
+    .forEach(l => {
+      const day = l.date.slice(0, 10)
+      if (!byDay[day] || l.date > byDay[day].date) byDay[day] = l
+    })
+  return Object.values(byDay).sort((a, b) => new Date(a.date) - new Date(b.date))
+}
+
+// Mini sparkline SVG inline
+function Sparkline({ data, color, height = 40 }) {
+  if (!data || data.length < 1) return (
+    <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-text-3)', fontSize: 11 }}>
+      Pas de données
+    </div>
+  )
+  if (data.length === 1) return (
+    <svg viewBox="0 0 300 50" style={{ width: '100%', height }} preserveAspectRatio="none">
+      <circle cx="150" cy={height / 2} r="4" fill={color} />
+    </svg>
+  )
+  const vals = data.map(d => d.value)
+  const min = Math.min(...vals)
+  const max = Math.max(...vals)
+  const range = max - min || 1
+  const w = 300
+  const step = w / (data.length - 1)
+  const pts = data.map((d, i) => {
+    const x = i * step
+    const y = height - ((d.value - min) / range) * (height - 6) - 3
+    return `${x},${y}`
+  }).join(' ')
+  return (
+    <svg viewBox={`0 0 ${w} ${height}`} style={{ width: '100%', height }} preserveAspectRatio="none">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+      {data.map((d, i) => (
+        <circle key={i} cx={i * step} cy={height - ((d.value - min) / range) * (height - 6) - 3} r="2.5" fill={color} />
+      ))}
+    </svg>
+  )
+}
+
+function GraphCard({ title, logs, color, unit, range, onRangeChange }) {
+  const filtered = filterLogs(logs, range)
+  const vals = filtered.map(d => d.value)
+  const avg = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : null
+  const min = vals.length ? Math.min(...vals) : null
+  const max = vals.length ? Math.max(...vals) : null
+
+  return (
+    <Card title={title}>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+        {RANGES.map(r => (
+          <button key={r.label} onClick={() => onRangeChange(r.days)} style={{
+            padding: '3px 10px', borderRadius: 20, fontSize: 11, cursor: 'pointer',
+            border: '0.5px solid var(--c-border)',
+            background: range === r.days ? 'var(--c-text)' : 'transparent',
+            color: range === r.days ? 'var(--c-bg)' : 'var(--c-text-2)',
+          }}>{r.label}</button>
+        ))}
+      </div>
+      <Sparkline data={filtered} color={color} height={50} />
+      {vals.length > 0 && (
+        <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 11, color: 'var(--c-text-2)' }}>
+          <span>Moy <strong style={{ color: 'var(--c-text)' }}>{avg}{unit}</strong></span>
+          <span>Min <strong style={{ color: 'var(--c-text)' }}>{min}{unit}</strong></span>
+          <span>Max <strong style={{ color: 'var(--c-text)' }}>{max}{unit}</strong></span>
+          <span style={{ marginLeft: 'auto' }}>{vals.length} entrée{vals.length > 1 ? 's' : ''}</span>
+        </div>
+      )}
+    </Card>
+  )
+}
 
 export default function App() {
   const [state, setState] = useState(null)
@@ -59,6 +144,8 @@ export default function App() {
   const [googleConnected, setGoogleConnected] = useState(false)
   const [calendarCreating, setCalendarCreating] = useState(false)
   const [toast, setToast] = useState(null)
+  const [cigInput, setCigInput] = useState('')
+  const [graphRanges, setGraphRanges] = useState({ poids: 30, fc: 30, cigs: 30 })
   const saveTimer = useRef(null)
 
   const showToast = (msg, type = 'ok') => {
@@ -86,10 +173,7 @@ export default function App() {
   }, [])
 
   const fetchStrava = async () => {
-    try {
-      const data = await api.stravaActivities()
-      setStravaData(data)
-    } catch {}
+    try { const data = await api.stravaActivities(); setStravaData(data) } catch {}
   }
 
   const isDone = (dayIdx) => {
@@ -101,58 +185,52 @@ export default function App() {
     if (SCHEDULE[i].type === 'rest') return
     const done = !isDone(i)
     setState(prev => {
-      const sessions = (prev.sessions || []).filter(
-        s => !(s.week_num === weekNum && s.year === year && s.day_index === i)
-      )
+      const sessions = (prev.sessions || []).filter(s => !(s.week_num === weekNum && s.year === year && s.day_index === i))
       if (done) sessions.push({ week_num: weekNum, year, day_index: i, done: 1 })
       return { ...prev, sessions }
     })
-    try {
-      await api.toggleSession(weekNum, year, i, done)
-    } catch { showToast('Erreur sync', 'err') }
+    try { await api.toggleSession(weekNum, year, i, done) }
+    catch { showToast('Erreur sync', 'err') }
   }
 
   const addLog = async (type, value) => {
-    if (!value || isNaN(value)) return false
-    setState(prev => ({ ...prev, [type]: parseFloat(value) }))
-    try {
-      await api.log(type, parseFloat(value))
-      showToast('Enregistré')
-      return true
-    } catch {
-      showToast('Erreur sync', 'err')
-      return false
-    }
+    if (value === '' || value === null || value === undefined || isNaN(value)) return false
+    const v = parseFloat(value)
+    setState(prev => ({
+      ...prev,
+      [type]: v,
+      logs: {
+        ...prev.logs,
+        [type]: [{ value: v, date: new Date().toISOString() }, ...(prev.logs?.[type] || [])].slice(0, 365)
+      }
+    }))
+    try { await api.log(type, v); showToast('Enregistré'); return true }
+    catch { showToast('Erreur sync', 'err'); return false }
+  }
+
+  const logCigs = async () => {
+    const v = parseInt(cigInput)
+    if (isNaN(v) || v < 0) return
+    const ok = await addLog('cigs', v)
+    if (ok) setCigInput('')
   }
 
   const saveCharge = useCallback((key, val) => {
     setState(prev => ({ ...prev, charges: { ...(prev.charges || {}), [key]: val } }))
     clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      api.saveCharges({ [key]: val }).catch(() => {})
-    }, 800)
+    saveTimer.current = setTimeout(() => { api.saveCharges({ [key]: val }).catch(() => {}) }, 800)
   }, [])
 
-  const connectStrava = async () => {
-    const { url } = await api.stravaAuth()
-    window.location.href = url
-  }
-
-  const connectGoogle = async () => {
-    const { url } = await api.googleAuth()
-    window.location.href = url
-  }
+  const connectStrava = async () => { const { url } = await api.stravaAuth(); window.location.href = url }
+  const connectGoogle = async () => { const { url } = await api.googleAuth(); window.location.href = url }
 
   const createCalendarEvents = async () => {
     setCalendarCreating(true)
     try {
       const result = await api.createCalendarEvents({ start_time: '09:00', weeks: 1 })
       showToast(`${result.created} événements créés`)
-    } catch {
-      showToast('Erreur création', 'err')
-    } finally {
-      setCalendarCreating(false)
-    }
+    } catch { showToast('Erreur création', 'err') }
+    finally { setCalendarCreating(false) }
   }
 
   if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--c-text-2)' }}>Chargement...</div>
@@ -166,6 +244,8 @@ export default function App() {
   const poids = state.poids || 85
   const fc = state.fc || null
   const poidsLogs = state.logs?.poids || []
+  const fcLogs = state.logs?.fc || []
+  const cigsLogs = state.logs?.cigs || []
   const poidsDelta = poidsLogs.length >= 2
     ? Math.round((poidsLogs[0].value - poidsLogs[1].value) * 10) / 10
     : null
@@ -192,7 +272,7 @@ export default function App() {
       </header>
 
       <nav style={{ display: 'flex', gap: 4, padding: '1rem 1rem 0', overflowX: 'auto' }}>
-        {[['week', 'Semaine'], ['metrics', 'Métriques'], ['muscu', 'Charges'], ['connect', 'Intégrations']].map(([id, label]) => (
+        {[['week', 'Semaine'], ['metrics', 'Métriques'], ['graphs', 'Graphes'], ['muscu', 'Charges'], ['connect', 'Intégrations']].map(([id, label]) => (
           <button key={id} onClick={() => setActiveTab(id)} style={{
             padding: '6px 14px', borderRadius: 20, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
             border: '0.5px solid var(--c-border)',
@@ -215,10 +295,8 @@ export default function App() {
                 const clickable = s.type !== 'rest' && s.type !== 'active'
                 return (
                   <div key={i} onClick={() => toggleDay(i)} style={{
-                    borderRadius: 8,
-                    border: isToday ? '1.5px solid var(--blue)' : '0.5px solid var(--c-border)',
-                    padding: '8px 4px', textAlign: 'center',
-                    cursor: clickable ? 'pointer' : 'default',
+                    borderRadius: 8, border: isToday ? '1.5px solid var(--blue)' : '0.5px solid var(--c-border)',
+                    padding: '8px 4px', textAlign: 'center', cursor: clickable ? 'pointer' : 'default',
                     background: done ? 'var(--green-light)' : s.type === 'rest' ? 'var(--c-bg-2)' : 'var(--c-bg)',
                   }}>
                     <div style={{ fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.04em', color: done ? 'var(--green-dark)' : 'var(--c-text-2)', marginBottom: 3 }}>{DAYS[i]}</div>
@@ -227,12 +305,7 @@ export default function App() {
                       {s.sub && <><br /><span style={{ color: 'var(--c-text-3)', fontSize: 8 }}>{s.sub}</span></>}
                     </div>
                     {clickable && (
-                      <div style={{
-                        width: 18, height: 18, borderRadius: '50%', margin: '4px auto 0',
-                        border: done ? 'none' : '1px solid var(--c-border-med)',
-                        background: done ? 'var(--green)' : 'transparent',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
+                      <div style={{ width: 18, height: 18, borderRadius: '50%', margin: '4px auto 0', border: done ? 'none' : '1px solid var(--c-border-med)', background: done ? 'var(--green)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         {done && <svg width="9" height="9" viewBox="0 0 12 12" fill="none"><polyline points="1.5,6 4.5,9 10.5,3" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                       </div>
                     )}
@@ -289,19 +362,25 @@ export default function App() {
             </div>
 
             <Card title="Tabac">
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
-                {Array.from({ length: 25 }, (_, i) => (
-                  <div key={i} onClick={() => {
-                    const next = i < cigs ? i : i + 1
-                    addLog('cigs', next)
-                  }} style={{
-                    width: 20, height: 20, borderRadius: 3, cursor: 'pointer',
-                    background: i < cigs ? 'var(--amber)' : 'var(--c-border)',
-                    transition: 'background 0.1s',
-                  }} />
-                ))}
+              <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginBottom: 8 }}>
+                Combien de clopes aujourd'hui ?
               </div>
-              <ProgressBar pct={Math.min(cigs / cigTarget * 100, 100)}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <input
+                  type="number" min="0" value={cigInput}
+                  onChange={e => setCigInput(e.target.value)}
+                  placeholder="Ex: 12"
+                  onKeyDown={e => e.key === 'Enter' && logCigs()}
+                  style={{ flex: 1, padding: '8px 12px', borderRadius: 8, border: '0.5px solid var(--c-border-med)', background: 'var(--c-bg-2)', color: 'var(--c-text)', fontSize: 14 }}
+                />
+                <button onClick={logCigs} style={{ padding: '8px 16px', borderRadius: 8, border: '0.5px solid var(--c-border-med)', background: 'transparent', color: 'var(--c-text)', fontSize: 13, cursor: 'pointer' }}>
+                  Log
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--c-text-2)', marginBottom: 6 }}>
+                Objectif semaine : <strong style={{ color: 'var(--amber)' }}>{cigTarget} max/j</strong>
+              </div>
+              <ProgressBar pct={cigTarget > 0 ? Math.min(cigs / cigTarget * 100, 100) : 100}
                 color={cigs >= cigTarget ? 'var(--red)' : cigs >= cigTarget * 0.8 ? 'var(--amber)' : 'var(--green)'} />
             </Card>
 
@@ -326,6 +405,29 @@ export default function App() {
                 </Card>
               </>
             )}
+          </>
+        )}
+
+        {/* --- Graphes --- */}
+        {activeTab === 'graphs' && (
+          <>
+            <GraphCard
+              title="Poids (kg)" logs={poidsLogs} color="var(--blue)" unit="kg"
+              range={graphRanges.poids}
+              onRangeChange={d => setGraphRanges(r => ({ ...r, poids: d }))}
+            />
+            <div style={{ height: 12 }} />
+            <GraphCard
+              title="FC repos (bpm)" logs={fcLogs} color="var(--red)" unit="bpm"
+              range={graphRanges.fc}
+              onRangeChange={d => setGraphRanges(r => ({ ...r, fc: d }))}
+            />
+            <div style={{ height: 12 }} />
+            <GraphCard
+              title="Cigarettes / jour" logs={cigsLogs} color="var(--amber)" unit="/j"
+              range={graphRanges.cigs}
+              onRangeChange={d => setGraphRanges(r => ({ ...r, cigs: d }))}
+            />
           </>
         )}
 
@@ -356,8 +458,7 @@ export default function App() {
                       <td style={{ padding: '7px 4px', borderBottom: i < MUSCU[activeMuscu].length - 1 ? '0.5px solid var(--c-border)' : 'none', color: 'var(--c-text-2)', fontSize: 11 }}>{ex.sets}</td>
                       <td style={{ padding: '7px 4px', borderBottom: i < MUSCU[activeMuscu].length - 1 ? '0.5px solid var(--c-border)' : 'none', color: 'var(--c-text-3)', fontSize: 11 }}>{ex.ref}</td>
                       <td style={{ padding: '7px 0', borderBottom: i < MUSCU[activeMuscu].length - 1 ? '0.5px solid var(--c-border)' : 'none' }}>
-                        <input type="text" defaultValue={state.charges?.[ex.key] || ''}
-                          placeholder="kg"
+                        <input type="text" defaultValue={state.charges?.[ex.key] || ''} placeholder="kg"
                           onBlur={e => saveCharge(ex.key, e.target.value)}
                           style={{ width: 60, padding: '4px 6px', borderRadius: 6, border: '0.5px solid var(--c-border-med)', background: 'var(--c-bg-2)', color: 'var(--c-text)', fontSize: 13, textAlign: 'center' }} />
                       </td>
@@ -386,9 +487,7 @@ export default function App() {
                 <button onClick={fetchStrava} style={connectBtnStyle}>Rafraîchir les données</button>
               )}
             </Card>
-
             <div style={{ height: 12 }} />
-
             <Card title="Google Calendar">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                 <div>
@@ -461,10 +560,7 @@ function StatusDot({ connected }) {
 
 function LogInput({ placeholder, onLog, unit, step = '1' }) {
   const [val, setVal] = useState('')
-  const submit = async () => {
-    const ok = await onLog(val)
-    if (ok) setVal('')
-  }
+  const submit = async () => { const ok = await onLog(val); if (ok) setVal('') }
   return (
     <div style={{ display: 'flex', gap: 8 }}>
       <input type="number" value={val} onChange={e => setVal(e.target.value)} placeholder={placeholder} step={step}
