@@ -1,5 +1,8 @@
 services:
   fitlife-backend:
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     build: ./backend
     container_name: fitlife-backend
     restart: unless-stopped
@@ -20,6 +23,9 @@ services:
       - "5000"
 
   fitlife-frontend:
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     build:
       context: ./frontend
       args:

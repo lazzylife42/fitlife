@@ -146,7 +146,7 @@ export default function App() {
   const createCalendarEvents = async () => {
     setCalendarCreating(true)
     try {
-      const result = await api.createCalendarEvents({ start_time: '07:00', weeks: 12 })
+      const result = await api.createCalendarEvents({ start_time: '09:00', weeks: 1 })
       showToast(`${result.created} événements créés`)
     } catch {
       showToast('Erreur création', 'err')
@@ -393,7 +393,7 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>Google Calendar</div>
-                  <div style={{ fontSize: 12, color: 'var(--c-text-2)' }}>Rappels séances 12 semaines</div>
+                  <div style={{ fontSize: 12, color: 'var(--c-text-2)' }}>Rappels séances hebdo</div>
                 </div>
                 <StatusDot connected={googleConnected} />
               </div>
