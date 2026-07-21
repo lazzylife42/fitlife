@@ -223,8 +223,10 @@ function WorkoutTab({ me, showToast }) {
   const [openEx, setOpenEx] = useState(null)
 
   const load = useCallback(async () => {
+    if (me.strava_connected) {
+      try { setStrava(await api.stravaActivities()) } catch {}
+    }
     setData(await api.workouts())
-    if (me.strava_connected) api.stravaActivities().then(setStrava).catch(() => {})
   }, [me.strava_connected])
 
   useEffect(() => { load() }, [load])
@@ -313,12 +315,11 @@ function WorkoutTab({ me, showToast }) {
         <>
           <div style={{ height: 12 }} />
           <Card title="Courses de la semaine">
-            {data.runs.map(r => (
-              <RunRow key={r.id} r={r} onDone={async () => {
-                await api.completeWorkout(r.id); showToast('Course validée'); load()
-              }} />
-            ))}
-            {w?.plan?.run_advice && <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginTop: 8 }}>{w.plan.run_advice}</div>}
+            {data.runs.map(r => <RunRow key={r.id} r={r} />)}
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 8 }}>
+              Validation automatique via Strava (min. 60% de la distance cible).
+            </div>
+            {w?.plan?.run_advice && <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginTop: 4 }}>{w.plan.run_advice}</div>}
           </Card>
         </>
       )}
@@ -405,14 +406,14 @@ function SetRow({ s, onSave, open, onToggleOpen }) {
   )
 }
 
-function RunRow({ r, onDone }) {
+function RunRow({ r }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '0.5px solid var(--c-border)' }}>
       <div>
         <div style={{ fontSize: 13, fontWeight: 500 }}>{r.plan.title} — {r.plan.km} km</div>
         <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>{r.plan.zone}</div>
       </div>
-      <button onClick={onDone} style={{ ...ghostBtnStyle, padding: '5px 12px', fontSize: 12 }}>Fait ✓</button>
+      <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>En attente Strava</span>
     </div>
   )
 }

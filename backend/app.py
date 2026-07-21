@@ -491,6 +491,34 @@ def fetch_strava_week(user_id):
     return {'activities': activities, 'total_km_week': total_km}
 
 
+def _auto_validate_runs(user_id, activities):
+    """Valide les courses planifiees de la semaine avec les runs Strava (>= 60% du km cible)."""
+    validated = 0
+    today = datetime.utcnow().date()
+    monday = today - timedelta(days=today.weekday())
+    runs = [a for a in activities if a['type'] == 'Run']
+    with get_db() as db:
+        planned = db.execute(
+            "SELECT id, plan_json FROM workouts WHERE user_id=? AND kind='run' "
+            "AND status='planned' AND scheduled_date >= ? ORDER BY id",
+            (user_id, monday.isoformat())).fetchall()
+        used = set()
+        for w in planned:
+            target_km = json.loads(w['plan_json']).get('km', 0)
+            for a in runs:
+                if a['id'] in used:
+                    continue
+                if a['distance_km'] >= target_km * 0.6:
+                    db.execute(
+                        "UPDATE workouts SET status='done', completed_at=?, "
+                        "notes=? WHERE id=?",
+                        (a['date'], f"strava:{a['id']} {a['distance_km']}km", w['id']))
+                    used.add(a['id'])
+                    validated += 1
+                    break
+    return validated
+
+
 @app.get('/api/strava/activities')
 @require_auth
 def strava_activities():
@@ -498,6 +526,7 @@ def strava_activities():
     if data is None:
         # 409 et pas 401 : un 401 ferait purger le JWT cote front
         return jsonify({'error': 'not_connected'}), 409
+    data['validated_runs'] = _auto_validate_runs(g.user_id, data['activities'])
     return jsonify(data)
 
 
