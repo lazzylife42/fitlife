@@ -1,0 +1,42 @@
+services:
+  fitlife-backend:
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    build: ./backend
+    container_name: fitlife-backend
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      DB_PATH: /data/fitlife.db
+      CORS_ORIGINS: https://fit.sabinomonte.ch
+      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
+      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
+      STRAVA_REDIRECT_URI: https://fit.sabinomonte.ch/api/strava/callback
+      OLLAMA_URL: ${OLLAMA_URL:-http://192.168.1.14:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b}
+      OLLAMA_TRANSLATE_MODEL: ${OLLAMA_TRANSLATE_MODEL:-mistral:7b}
+    volumes:
+      - fitlife-data:/data
+      - /opt/fitlife-dataset:/dataset:ro
+      - /opt/fitlife-media:/media-out
+    expose:
+      - "5000"
+
+  fitlife-frontend:
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    build:
+      context: ./frontend
+    container_name: fitlife-frontend
+    restart: unless-stopped
+    ports:
+      - "3010:80"
+    volumes:
+      - /opt/fitlife-media:/usr/share/nginx/html/media:ro
+    depends_on:
+      - fitlife-backend
+
+volumes:
+  fitlife-data:
