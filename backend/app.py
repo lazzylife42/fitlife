@@ -26,6 +26,15 @@ app.secret_key = SECRET_KEY
 CORS(app, origins=os.environ.get('CORS_ORIGINS', 'http://localhost:5173').split(','))
 
 DB_PATH = os.environ.get('DB_PATH', '/data/fitlife.db')
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT', '/media-out')
+
+
+def _media_if_exists(url):
+    """Retourne l'URL seulement si le fichier existe sur le disque (sinon None)."""
+    if not url:
+        return None
+    rel = url.replace('/media/', '', 1)
+    return url if os.path.isfile(os.path.join(MEDIA_ROOT, rel)) else None
 STRAVA_CLIENT_ID = os.environ.get('STRAVA_CLIENT_ID')
 STRAVA_CLIENT_SECRET = os.environ.get('STRAVA_CLIENT_SECRET')
 STRAVA_REDIRECT_URI = os.environ.get('STRAVA_REDIRECT_URI', 'https://fit.sabinomonte.ch/api/strava/callback')
@@ -189,7 +198,13 @@ def list_exercises():
         rows = db.execute(sql, params).fetchall()
         cats = db.execute('SELECT DISTINCT category FROM exercises ORDER BY category').fetchall()
         eqs = db.execute('SELECT DISTINCT equipment FROM exercises ORDER BY equipment').fetchall()
-    return jsonify({'exercises': [dict(r) for r in rows],
+    exercises = []
+    for r in rows:
+        d = dict(r)
+        d['image'] = _media_if_exists(d.get('image'))
+        d['gif'] = _media_if_exists(d.get('gif'))
+        exercises.append(d)
+    return jsonify({'exercises': exercises,
                     'categories': [c['category'] for c in cats],
                     'equipments': [e['equipment'] for e in eqs]})
 
@@ -207,7 +222,12 @@ def _workout_with_sets(db, workout_id):
         'FROM workout_sets ws '
         'JOIN exercises e ON e.id = ws.exercise_id '
         'WHERE ws.workout_id=? ORDER BY ws.position', (workout_id,)).fetchall()
-    out['sets'] = [dict(s) for s in sets]
+    out['sets'] = []
+    for s in sets:
+        d = dict(s)
+        d['image'] = _media_if_exists(d.get('image'))
+        d['gif'] = _media_if_exists(d.get('gif'))
+        out['sets'].append(d)
     return out
 
 

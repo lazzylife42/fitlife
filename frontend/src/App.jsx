@@ -399,7 +399,7 @@ function SetRow({ s, onSave, open, onToggleOpen }) {
       </div>
       {open && (
         <div style={{ marginTop: 8 }}>
-          {s.gif && <img src={s.gif} alt={s.name} style={{ width: '100%', borderRadius: 8, marginBottom: 6 }} loading="lazy" />}
+          {s.gif && <img src={s.gif} alt="" onError={e => { e.target.style.display = 'none' }} style={{ width: '100%', borderRadius: 8, marginBottom: 6 }} loading="lazy" />}
           <InstructionsFR exerciseId={s.exercise_id} fallback={s.instructions} />
         </div>
       )}
@@ -446,7 +446,7 @@ function ExercisesTab() {
       {(data?.exercises || []).map(ex => (
         <div key={ex.id} style={{ background: 'var(--c-bg)', border: '0.5px solid var(--c-border)', borderRadius: 10, padding: '10px 12px', marginBottom: 6 }}>
           <div onClick={() => setOpenId(openId === ex.id ? null : ex.id)} style={{ display: 'flex', gap: 10, cursor: 'pointer', alignItems: 'center' }}>
-            {ex.image && <img src={ex.image} alt="" style={{ width: 44, height: 44, borderRadius: 6, objectFit: 'cover' }} loading="lazy" />}
+            {ex.image && <img src={ex.image} alt="" onError={e => { e.target.style.display = 'none' }} style={{ width: 44, height: 44, borderRadius: 6, objectFit: 'cover' }} loading="lazy" />}
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 500 }}>{cap(ex.name)}</div>
               <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>{catFr(ex.category)} · {equipFr(ex.equipment)}</div>
@@ -454,7 +454,7 @@ function ExercisesTab() {
           </div>
           {openId === ex.id && (
             <div style={{ marginTop: 8 }}>
-              {ex.gif && <img src={ex.gif} alt={ex.name} style={{ width: '100%', borderRadius: 8, marginBottom: 6 }} loading="lazy" />}
+              {ex.gif && <img src={ex.gif} alt="" onError={e => { e.target.style.display = 'none' }} style={{ width: '100%', borderRadius: 8, marginBottom: 6 }} loading="lazy" />}
               <InstructionsFR exerciseId={ex.id} fallback={ex.instructions} />
             </div>
           )}

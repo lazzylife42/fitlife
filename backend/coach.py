@@ -419,10 +419,12 @@ def ollama_generate_gym_plan(db, user_id, strava_activities=None, mode='gym'):
     pool_ids = {e['id'] for e in pool}
     meta = {e['id']: e for e in pool}
     cleaned = []
-    for ex in plan['exercises'][:6]:
+    seen = set()
+    for ex in plan['exercises'][:8]:
         ex_id = str(ex.get('id', '')).strip().zfill(4)  # qwen strip parfois les zeros de tete
-        if ex_id not in pool_ids:
+        if ex_id not in pool_ids or ex_id in seen:
             continue
+        seen.add(ex_id)
         cleaned.append({
             'id': ex_id,
             'name': meta[ex_id]['name'],

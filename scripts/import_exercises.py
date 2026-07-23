@@ -23,13 +23,15 @@ DATASET_DIR = os.environ.get('DATASET_DIR', '/dataset')
 MEDIA_OUT = os.environ.get('MEDIA_OUT', '/media-out')
 DB_PATH = os.environ.get('DB_PATH', '/data/fitlife.db')
 
-# Equipement dispo NonStop Gym
+# Equipement dispo NonStop Gym (Malley — MATRIX)
 ALLOWED_EQUIPMENT = {
     'leverage machine',
     'cable',
     'dumbbell',
     'smith machine',
     'body weight',
+    'barbell',
+    'kettlebell',
 }
 
 
@@ -69,10 +71,18 @@ def main():
             gif_url = f"/media/{gif_rel}"
 
         db.execute(
-            """INSERT OR REPLACE INTO exercises
+            """INSERT INTO exercises
                (id, name, category, equipment, target, muscle_group,
                 secondary_muscles, instructions, image, gif)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 name=excluded.name, category=excluded.category,
+                 equipment=excluded.equipment, target=excluded.target,
+                 muscle_group=excluded.muscle_group,
+                 secondary_muscles=excluded.secondary_muscles,
+                 instructions=excluded.instructions,
+                 image=excluded.image, gif=excluded.gif""",
+            # note: instructions_fr volontairement absent -> traductions conservees
             (
                 e['id'],
                 e['name'],
