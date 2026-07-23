@@ -54,7 +54,7 @@ def exercise_pool(db, profile, per_category=10):
         c = r['category']
         if c in skip:
             continue
-        if any(b in r['name'].lower() for b in NAME_BLACKLIST):
+        if _is_excluded(dict(r)):
             continue
         if counts.get(c, 0) < per_category:
             pool.append(dict(r))
@@ -87,11 +87,22 @@ def build_context(db, user_id):
 
 # --- Fallback deterministe ---
 
-# Priorite equipement (machines guidees d'abord) + exclusion des exos exotiques
-EQUIP_PRIORITY = ['leverage machine', 'cable', 'smith machine', 'dumbbell', 'body weight']
+# Priorite equipement : machines guidees > halteres > cable (doubles poulies souvent prises)
+EQUIP_PRIORITY = ['leverage machine', 'dumbbell', 'cable', 'smith machine', 'body weight']
 NAME_BLACKLIST = ('balance board', 'bosu', 'stability', 'wheel', 'rope', 'suspended',
                   'run', 'walk', 'stepmill', 'elliptical', 'burpee', 'handstand',
                   'muscle up', 'planche push', 'one arm', 'single arm push')
+# Exos cable necessitant la double poulie (station souvent occupee)
+DUAL_CABLE_KEYWORDS = ('cross-over', 'crossover', 'cable fly', 'cable alternate')
+
+
+def _is_excluded(e):
+    name = e['name'].lower()
+    if any(b in name for b in NAME_BLACKLIST):
+        return True
+    if e['equipment'] == 'cable' and any(k in name for k in DUAL_CABLE_KEYWORDS):
+        return True
+    return False
 
 
 def _equip_rank(e):
@@ -102,8 +113,7 @@ def _equip_rank(e):
 
 
 def _pick_exercise(pool, category, target_hint, prefer_id=None):
-    candidates = [e for e in pool if e['category'] == category
-                  and not any(b in e['name'].lower() for b in NAME_BLACKLIST)]
+    candidates = [e for e in pool if e['category'] == category and not _is_excluded(e)]
     if prefer_id:
         for e in candidates:
             if e['id'] == prefer_id:
@@ -252,8 +262,9 @@ SYSTEM_PROMPT = (
     "- reps = format simple: '12' ou '8-10' ou '30-45s'.\n"
     "- Surcharge progressive ~5% sur les exos completes la fois precedente, "
     "sinon reprendre la meme charge.\n"
-    "- Privilegie les machines guidees (leverage machine) et cables, "
-    "evite les exercices exotiques ou acrobatiques.\n"
+    "- Privilegie les machines guidees (leverage machine) et les halteres. "
+    "Evite les exercices necessitant une double poulie (cross-over, cable fly) "
+    "et les exercices exotiques ou acrobatiques.\n"
     "- advice = 2-3 phrases d'analyse personnalisee basee sur l'historique et les metriques.\n"
     "- Si la FC de repos monte ou fatigue visible dans Strava, reduis le volume."
 )
