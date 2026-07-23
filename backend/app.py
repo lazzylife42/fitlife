@@ -57,6 +57,11 @@ def init_db():
             db.execute("ALTER TABLE generation_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'gym'")
         except sqlite3.OperationalError:
             pass
+        try:
+            db.execute("ALTER TABLE profiles ADD COLUMN excluded_equipment TEXT "
+                       "NOT NULL DEFAULT '[\"dual_cable\"]'")
+        except sqlite3.OperationalError:
+            pass
     log.info("DB initialized at %s", DB_PATH)
 
 
@@ -146,13 +151,17 @@ def save_profile():
     run_km = float(data.get('run_km_target') or 0)
     run_days = int(data.get('run_days') or 0)
     with get_db() as db:
+        prev = db.execute('SELECT excluded_equipment FROM profiles WHERE user_id=?',
+                          (g.user_id,)).fetchone()
+        excluded = prev['excluded_equipment'] if prev else '["dual_cable"]'
         db.execute(
             """INSERT OR REPLACE INTO profiles
                (user_id, goal, gym_days, focus, level, equipment_pref,
-                run_km_target, run_days, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                run_km_target, run_days, excluded_equipment, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (g.user_id, data['goal'], data['gym_days'], data['focus'], data['level'],
-             data['equipment_pref'], run_km, run_days, datetime.utcnow().isoformat()))
+             data['equipment_pref'], run_km, run_days, excluded,
+             datetime.utcnow().isoformat()))
     return jsonify({'ok': True})
 
 
@@ -278,6 +287,32 @@ def generate_first_workout():
             'INSERT INTO generation_jobs (user_id, created_at) VALUES (?, ?)',
             (g.user_id, datetime.utcnow().isoformat()))
     return jsonify({'ok': True, 'workout_id': workout_id})
+
+
+@app.post('/api/profile/exclusions')
+@require_auth
+def save_exclusions():
+    """Toggles d'exclusion materiel. Regenere la seance planifiee."""
+    excluded = (request.json or {}).get('excluded', [])
+    if not isinstance(excluded, list) or not set(excluded) <= coach.EXCLUDABLE_EQUIPMENT:
+        return jsonify({'error': 'exclusions invalides'}), 400
+    with get_db() as db:
+        db.execute('UPDATE profiles SET excluded_equipment=?, updated_at=? WHERE user_id=?',
+                   (json.dumps(excluded), datetime.utcnow().isoformat(), g.user_id))
+        profile = db.execute('SELECT * FROM profiles WHERE user_id=?', (g.user_id,)).fetchone()
+        target = db.execute(
+            "SELECT id, plan_json FROM workouts WHERE user_id=? AND status='planned' "
+            "AND kind='gym' ORDER BY id LIMIT 1", (g.user_id,)).fetchone()
+        if profile and target:
+            is_travel = json.loads(target['plan_json']).get('mode') == 'travel'
+            if not is_travel:
+                plan = coach.fallback_gym_plan(db, g.user_id, dict(profile))
+                _replace_plan(db, target['id'], plan, 'fallback')
+                db.execute("UPDATE generation_jobs SET status='done' "
+                           "WHERE user_id=? AND status='pending'", (g.user_id,))
+                db.execute('INSERT INTO generation_jobs (user_id, created_at) VALUES (?, ?)',
+                           (g.user_id, datetime.utcnow().isoformat()))
+    return jsonify({'ok': True})
 
 
 @app.post('/api/workouts/mode')

@@ -17,7 +17,8 @@ OLLAMA_TIMEOUT = int(os.environ.get('OLLAMA_TIMEOUT', '180'))
 EQUIPMENT_MAP = {
     'machines': ['leverage machine', 'cable', 'smith machine', 'body weight'],
     'machines_dumbbells': ['leverage machine', 'cable', 'smith machine', 'body weight', 'dumbbell'],
-    'all': ['leverage machine', 'cable', 'smith machine', 'body weight', 'dumbbell'],
+    'all': ['leverage machine', 'cable', 'smith machine', 'body weight', 'dumbbell',
+            'barbell', 'kettlebell'],
 }
 
 # Templates de seance : cycle A/B/C, slots = (category, mot-cle target optionnel)
@@ -42,23 +43,30 @@ def _allowed_equipment(profile):
 
 
 def exercise_pool(db, profile, per_category=10):
-    """Pool filtre par equipement, limite par categorie pour le prompt."""
-    eq = _allowed_equipment(profile)
+    """Pool filtre par equipement, exclusions user, limite par categorie."""
+    excluded = _excluded_set(profile)
+    allow_dual = 'dual_cable' not in excluded
+    eq = [e for e in _allowed_equipment(profile) if e not in excluded]
+    if not eq:
+        eq = ['leverage machine', 'body weight']  # garde-fou
     skip = {'neck', 'cardio', 'lower arms'}
     placeholders = ','.join('?' * len(eq))
     rows = db.execute(
         f"SELECT id, name, category, equipment, target FROM exercises "
         f"WHERE equipment IN ({placeholders}) ORDER BY category, id", eq).fetchall()
-    pool, counts = [], {}
+    by_cat = {}
     for r in rows:
         c = r['category']
         if c in skip:
             continue
-        if _is_excluded(dict(r)):
+        e = dict(r)
+        if _is_excluded(e, allow_dual):
             continue
-        if counts.get(c, 0) < per_category:
-            pool.append(dict(r))
-            counts[c] = counts.get(c, 0) + 1
+        by_cat.setdefault(c, []).append(e)
+    pool = []
+    for c, items in by_cat.items():
+        items.sort(key=lambda e: (_equip_rank(e), e['name']))  # machines/halteres d'abord
+        pool.extend(items[:per_category])
     return pool
 
 
@@ -88,21 +96,41 @@ def build_context(db, user_id):
 # --- Fallback deterministe ---
 
 # Priorite equipement : machines guidees > halteres > cable (doubles poulies souvent prises)
-EQUIP_PRIORITY = ['leverage machine', 'dumbbell', 'cable', 'smith machine', 'body weight']
+EQUIP_PRIORITY = ['leverage machine', 'dumbbell', 'cable', 'smith machine',
+                  'barbell', 'kettlebell', 'body weight']
 NAME_BLACKLIST = ('balance board', 'bosu', 'stability', 'wheel', 'rope', 'suspended',
                   'run', 'walk', 'stepmill', 'elliptical', 'burpee', 'handstand',
                   'muscle up', 'planche push', 'one arm', 'single arm push')
 # Exos cable necessitant la double poulie (station souvent occupee)
 DUAL_CABLE_KEYWORDS = ('cross-over', 'crossover', 'cable fly', 'cable alternate')
+# Cable autorise uniquement pour les mouvements simple poulie
+CABLE_ALLOWED_KEYWORDS = ('pushdown', 'pulldown', 'pull-down', 'row', 'curl',
+                          'face pull', 'kickback', 'pull-through', 'crunch',
+                          'triceps extension')
 
 
-def _is_excluded(e):
+def _is_excluded(e, allow_dual_cable=False):
     name = e['name'].lower()
     if any(b in name for b in NAME_BLACKLIST):
         return True
-    if e['equipment'] == 'cable' and any(k in name for k in DUAL_CABLE_KEYWORDS):
-        return True
+    if e['equipment'] == 'cable' and not allow_dual_cable:
+        if any(k in name for k in DUAL_CABLE_KEYWORDS):
+            return True
+        if not any(k in name for k in CABLE_ALLOWED_KEYWORDS):
+            return True  # raises, flys, press, bends... = station double poulie
     return False
+
+
+# Cles d'exclusion configurables par le user (Profil)
+EXCLUDABLE_EQUIPMENT = {'cable', 'dumbbell', 'smith machine', 'barbell',
+                        'kettlebell', 'dual_cable'}
+
+
+def _excluded_set(profile):
+    try:
+        return set(json.loads(profile.get('excluded_equipment') or '["dual_cable"]'))
+    except (json.JSONDecodeError, TypeError):
+        return {'dual_cable'}
 
 
 def _equip_rank(e):
@@ -113,7 +141,7 @@ def _equip_rank(e):
 
 
 def _pick_exercise(pool, category, target_hint, prefer_id=None):
-    candidates = [e for e in pool if e['category'] == category and not _is_excluded(e)]
+    candidates = [e for e in pool if e['category'] == category]
     if prefer_id:
         for e in candidates:
             if e['id'] == prefer_id:
@@ -263,7 +291,8 @@ SYSTEM_PROMPT = (
     "- Surcharge progressive ~5% sur les exos completes la fois precedente, "
     "sinon reprendre la meme charge.\n"
     "- Privilegie les machines guidees (leverage machine) et les halteres. "
-    "Evite les exercices necessitant une double poulie (cross-over, cable fly) "
+    "MAXIMUM 2 exercices au cable par seance. "
+    "Evite les exercices necessitant une double poulie (cross-over, cable fly, raises au cable) "
     "et les exercices exotiques ou acrobatiques.\n"
     "- advice = 2-3 phrases d'analyse personnalisee basee sur l'historique et les metriques.\n"
     "- Si la FC de repos monte ou fatigue visible dans Strava, reduis le volume."
@@ -385,12 +414,14 @@ def ollama_generate_gym_plan(db, user_id, strava_activities=None, mode='gym'):
     if not isinstance(plan.get('exercises'), list) or not plan['exercises']:
         log.warning("Ollama raw response (bad structure): %s", content[:500])
         raise ValueError('Plan invalide: exercises manquant')
-    valid_ids = {r['id'] for r in db.execute('SELECT id FROM exercises').fetchall()}
-    meta = {r['id']: r for r in db.execute('SELECT id, name, category FROM exercises').fetchall()}
+    # Uniquement les ids du POOL propose (sinon le modele recopie l'historique,
+    # y compris des exos exclus comme les doubles poulies)
+    pool_ids = {e['id'] for e in pool}
+    meta = {e['id']: e for e in pool}
     cleaned = []
     for ex in plan['exercises'][:6]:
         ex_id = str(ex.get('id', '')).strip().zfill(4)  # qwen strip parfois les zeros de tete
-        if ex_id not in valid_ids:
+        if ex_id not in pool_ids:
             continue
         cleaned.append({
             'id': ex_id,
@@ -407,6 +438,11 @@ def ollama_generate_gym_plan(db, user_id, strava_activities=None, mode='gym'):
     if mode != 'travel' and len(categories) < 3:
         log.warning("Ollama plan pas assez varie (%s): %s", categories, content[:300])
         raise ValueError(f'Plan invalide: pas assez varie ({len(categories)} groupes)')
+    # Max 2 exos cable par seance (stations souvent occupees)
+    n_cable = sum(1 for e in cleaned if meta[e['id']].get('equipment') == 'cable')
+    if n_cable > 2:
+        log.warning("Ollama plan trop de cable (%d): %s", n_cable, content[:300])
+        raise ValueError(f'Plan invalide: trop de cable ({n_cable})')
     if plan.get('title', '').lower().strip() in ('exercise database', 'seance', 'workout', ''):
         plan['title'] = 'Séance du coach'
     plan['exercises'] = cleaned

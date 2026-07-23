@@ -61,6 +61,7 @@ const EQUIP_FR = {
 }
 const catFr = c => CAT_FR[c] || c
 const equipFr = e => EQUIP_FR[e] || e
+const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 
 // ============ Auth ============
 
@@ -376,7 +377,7 @@ function SetRow({ s, onSave, open, onToggleOpen }) {
     <div style={{ borderBottom: '0.5px solid var(--c-border)', padding: '8px 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <div onClick={onToggleOpen} style={{ flex: 1, cursor: 'pointer' }}>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>{s.name}</div>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>{cap(s.name)}</div>
           <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>
             {s.target_sets}×{s.target_reps}
             {bodyweight ? ' · poids du corps' : s.target_weight ? ` · cible ${s.target_weight}kg` : ''}
@@ -447,7 +448,7 @@ function ExercisesTab() {
           <div onClick={() => setOpenId(openId === ex.id ? null : ex.id)} style={{ display: 'flex', gap: 10, cursor: 'pointer', alignItems: 'center' }}>
             {ex.image && <img src={ex.image} alt="" style={{ width: 44, height: 44, borderRadius: 6, objectFit: 'cover' }} loading="lazy" />}
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>{ex.name}</div>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>{cap(ex.name)}</div>
               <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>{catFr(ex.category)} · {equipFr(ex.equipment)}</div>
             </div>
           </div>
@@ -551,9 +552,36 @@ function MetricsTab({ showToast }) {
 
 // ============ Profil ============
 
+const EXCLUDABLE = [
+  ['dual_cable', 'Double poulie (vis-à-vis)'],
+  ['cable', 'Câble (simple poulie)'],
+  ['dumbbell', 'Haltères'],
+  ['smith machine', 'Smith machine'],
+  ['barbell', 'Barre'],
+  ['kettlebell', 'Kettlebell'],
+]
+
 function ProfileTab({ me, refreshMe, showToast }) {
   const [editing, setEditing] = useState(false)
+  const [excluded, setExcluded] = useState(() => {
+    try { return JSON.parse(me.profile.excluded_equipment || '["dual_cable"]') }
+    catch { return ['dual_cable'] }
+  })
+  const [savingExcl, setSavingExcl] = useState(false)
   const p = me.profile
+
+  const toggleExclusion = async (key) => {
+    const next = excluded.includes(key) ? excluded.filter(k => k !== key) : [...excluded, key]
+    setExcluded(next)
+    setSavingExcl(true)
+    try {
+      await api.saveExclusions(next)
+      showToast('Programme mis à jour')
+    } catch (e) {
+      showToast(e.message, 'err')
+      setExcluded(excluded)
+    } finally { setSavingExcl(false) }
+  }
 
   const connectStrava = async () => {
     try {
@@ -582,6 +610,33 @@ function ProfileTab({ me, refreshMe, showToast }) {
         <Row label="Course" value={p.run_days ? `${p.run_days}j — ${p.run_km_target} km/sem` : 'Non'} />
         <div style={{ height: 10 }} />
         <button onClick={() => setEditing(true)} style={ghostBtnStyle}>Modifier mes objectifs</button>
+      </Card>
+      <div style={{ height: 12 }} />
+      <Card title="Matériel exclu">
+        <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginBottom: 10 }}>
+          Coche ce que tu veux éviter (trop dur, toujours occupé...). La séance se régénère.
+        </div>
+        {EXCLUDABLE.map(([key, label]) => {
+          const on = excluded.includes(key)
+          return (
+            <div key={key} onClick={() => !savingExcl && toggleExclusion(key)}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '0.5px solid var(--c-border)', cursor: 'pointer', opacity: savingExcl ? 0.6 : 1 }}>
+              <span style={{ fontSize: 13 }}>{label}</span>
+              <div style={{
+                width: 40, height: 22, borderRadius: 20, position: 'relative', transition: 'background 0.15s',
+                background: on ? 'var(--red)' : 'var(--c-border-med)',
+              }}>
+                <div style={{
+                  width: 18, height: 18, borderRadius: '50%', background: 'white',
+                  position: 'absolute', top: 2, left: on ? 20 : 2, transition: 'left 0.15s',
+                }} />
+              </div>
+            </div>
+          )
+        })}
+        <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 8 }}>
+          Rouge = exclu du programme.
+        </div>
       </Card>
       <div style={{ height: 12 }} />
       <Card title="Strava">

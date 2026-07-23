@@ -24,6 +24,7 @@ export const api = {
   login: (email, password) => req('POST', '/auth/login', { email, password }),
   me: () => req('GET', '/me'),
   saveProfile: (p) => req('POST', '/profile', p),
+  saveExclusions: (excluded) => req('POST', '/profile/exclusions', { excluded }),
 
   exerciseFr: (id) => req('GET', `/exercises/${id}/fr`),
   exercises: (params = {}) => {
