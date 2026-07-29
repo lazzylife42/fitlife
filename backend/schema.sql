@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS workout_sets (
     target_weight REAL,
     actual_weight REAL,
     actual_reps TEXT,
-    done INTEGER NOT NULL DEFAULT 0
+    done INTEGER NOT NULL DEFAULT 0,
+    note TEXT                        -- ex: "haltères au lieu de la machine"
 );
 CREATE INDEX IF NOT EXISTS idx_sets_workout ON workout_sets(workout_id);
 

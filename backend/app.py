@@ -71,6 +71,10 @@ def init_db():
                        "NOT NULL DEFAULT '[\"dual_cable\"]'")
         except sqlite3.OperationalError:
             pass
+        try:
+            db.execute('ALTER TABLE workout_sets ADD COLUMN note TEXT')
+        except sqlite3.OperationalError:
+            pass
     log.info("DB initialized at %s", DB_PATH)
 
 
@@ -376,10 +380,10 @@ def update_set(workout_id, set_id):
         if not owner or owner['user_id'] != g.user_id:
             return jsonify({'error': 'not_found'}), 404
         db.execute(
-            'UPDATE workout_sets SET actual_weight=?, actual_reps=?, done=? '
+            'UPDATE workout_sets SET actual_weight=?, actual_reps=?, done=?, note=? '
             'WHERE id=? AND workout_id=?',
             (data.get('actual_weight'), data.get('actual_reps'),
-             1 if data.get('done') else 0, set_id, workout_id))
+             1 if data.get('done') else 0, data.get('note') or None, set_id, workout_id))
     return jsonify({'ok': True})
 
 
@@ -549,14 +553,12 @@ def fetch_strava_week(user_id):
 def _auto_validate_runs(user_id, activities):
     """Valide les courses planifiees de la semaine avec les runs Strava (>= 60% du km cible)."""
     validated = 0
-    today = datetime.utcnow().date()
-    monday = today - timedelta(days=today.weekday())
     runs = [a for a in activities if a['type'] == 'Run']
     with get_db() as db:
         planned = db.execute(
             "SELECT id, plan_json FROM workouts WHERE user_id=? AND kind='run' "
-            "AND status='planned' AND scheduled_date >= ? ORDER BY id",
-            (user_id, monday.isoformat())).fetchall()
+            "AND status='planned' ORDER BY id",
+            (user_id,)).fetchall()
         used = set()
         for w in planned:
             target_km = json.loads(w['plan_json']).get('km', 0)

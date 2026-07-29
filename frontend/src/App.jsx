@@ -241,7 +241,8 @@ function WorkoutTab({ me, showToast }) {
       next: {
         ...prev.next,
         sets: prev.next.sets.map(s => s.id === setId
-          ? { ...s, actual_weight: patch.actual_weight, done: patch.done ? 1 : 0 }
+          ? { ...s, actual_weight: patch.actual_weight, done: patch.done ? 1 : 0,
+              note: patch.note !== undefined ? patch.note : s.note }
           : s),
       },
     }))
@@ -362,15 +363,19 @@ function WorkoutTab({ me, showToast }) {
 function SetRow({ s, onSave, open, onToggleOpen }) {
   const [weight, setWeight] = useState(s.actual_weight ?? s.target_weight ?? '')
   const [done, setDone] = useState(!!s.done)
+  const [note, setNote] = useState(s.note ?? '')
   const bodyweight = s.equipment === 'body weight'
 
   const toggleDone = () => {
     const next = !done
     setDone(next)
-    onSave(s.id, { actual_weight: bodyweight || weight === '' ? null : parseFloat(weight), done: next })
+    onSave(s.id, { actual_weight: bodyweight || weight === '' ? null : parseFloat(weight), done: next, note })
   }
   const blurWeight = () => {
-    onSave(s.id, { actual_weight: weight === '' ? null : parseFloat(weight), done })
+    onSave(s.id, { actual_weight: weight === '' ? null : parseFloat(weight), done, note })
+  }
+  const blurNote = () => {
+    onSave(s.id, { actual_weight: bodyweight || weight === '' ? null : parseFloat(weight), done, note })
   }
 
   return (
@@ -401,6 +406,10 @@ function SetRow({ s, onSave, open, onToggleOpen }) {
         <div style={{ marginTop: 8 }}>
           {s.gif && <img src={s.gif} alt="" onError={e => { e.target.style.display = 'none' }} style={{ width: '100%', borderRadius: 8, marginBottom: 6 }} loading="lazy" />}
           <InstructionsFR exerciseId={s.exercise_id} fallback={s.instructions} />
+          <textarea value={note} onChange={e => setNote(e.target.value)} onBlur={blurNote}
+            placeholder="Note (ex: fait aux haltères, pas de machine dispo)"
+            rows={2}
+            style={{ width: '100%', marginTop: 8, padding: '6px 8px', borderRadius: 6, border: '0.5px solid var(--c-border-med)', background: 'var(--c-bg-2)', color: 'var(--c-text)', fontSize: 12, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }} />
         </div>
       )}
     </div>
