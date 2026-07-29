@@ -36,7 +36,7 @@ export const api = {
   generateWorkout: () => req('POST', '/workouts/generate'),
   setMode: (mode) => req('POST', '/workouts/mode', { mode }),
   updateSet: (workoutId, setId, data) => req('POST', `/workouts/${workoutId}/sets/${setId}`, data),
-  completeWorkout: (workoutId) => req('POST', `/workouts/${workoutId}/complete`),
+  completeWorkout: (workoutId, data = {}) => req('POST', `/workouts/${workoutId}/complete`, data),
 
   log: (type, value, date) => req('POST', `/log/${type}`, { value, date }),
   logs: () => req('GET', '/logs'),

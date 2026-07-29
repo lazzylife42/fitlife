@@ -222,6 +222,7 @@ function WorkoutTab({ me, showToast }) {
   const [strava, setStrava] = useState(null)
   const [busy, setBusy] = useState(false)
   const [openEx, setOpenEx] = useState(null)
+  const [sessionNote, setSessionNote] = useState('')
 
   const load = useCallback(async () => {
     if (me.strava_connected) {
@@ -252,7 +253,8 @@ function WorkoutTab({ me, showToast }) {
   const complete = async () => {
     setBusy(true)
     try {
-      await api.completeWorkout(w.id)
+      await api.completeWorkout(w.id, { note: sessionNote })
+      setSessionNote('')
       showToast('Séance enregistrée, prochaine séance générée')
       await load()
     } catch (e) { showToast(e.message, 'err') } finally { setBusy(false) }
@@ -300,7 +302,11 @@ function WorkoutTab({ me, showToast }) {
           {w.sets.map(s => (
             <SetRow key={s.id} s={s} onSave={saveSet} open={openEx === s.id} onToggleOpen={() => setOpenEx(openEx === s.id ? null : s.id)} />
           ))}
-          <div style={{ height: 12 }} />
+          <textarea value={sessionNote} onChange={e => setSessionNote(e.target.value)}
+            placeholder="Note sur la séance (optionnel)"
+            rows={2}
+            style={{ width: '100%', marginTop: 4, padding: '6px 8px', borderRadius: 6, border: '0.5px solid var(--c-border-med)', background: 'var(--c-bg-2)', color: 'var(--c-text)', fontSize: 12, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }} />
+          <div style={{ height: 8 }} />
           <button onClick={complete} disabled={busy} style={{ ...primaryBtnStyle, background: 'var(--teal)', color: 'white' }}>
             {busy ? '...' : 'Terminer la séance ✓'}
           </button>
@@ -317,9 +323,9 @@ function WorkoutTab({ me, showToast }) {
         <>
           <div style={{ height: 12 }} />
           <Card title="Courses de la semaine">
-            {data.runs.map(r => <RunRow key={r.id} r={r} />)}
+            {data.runs.map(r => <RunRow key={r.id} r={r} onDone={load} showToast={showToast} />)}
             <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 8 }}>
-              Validation automatique via Strava (min. 60% de la distance cible).
+              À valider manuellement une fois la course faite.
             </div>
             {w?.plan?.run_advice && <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginTop: 4 }}>{w.plan.run_advice}</div>}
           </Card>
@@ -416,14 +422,45 @@ function SetRow({ s, onSave, open, onToggleOpen }) {
   )
 }
 
-function RunRow({ r }) {
+function RunRow({ r, onDone, showToast }) {
+  const [open, setOpen] = useState(false)
+  const [km, setKm] = useState(r.plan.km || '')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const validate = async () => {
+    setBusy(true)
+    try {
+      await api.completeWorkout(r.id, { distance_km: km === '' ? null : parseFloat(km), note })
+      showToast('Course validée')
+      await onDone()
+    } catch (e) { showToast(e.message, 'err') } finally { setBusy(false) }
+  }
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '0.5px solid var(--c-border)' }}>
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 500 }}>{r.plan.title} — {r.plan.km} km</div>
-        <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>{r.plan.zone}</div>
+    <div style={{ padding: '6px 0', borderBottom: '0.5px solid var(--c-border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>{r.plan.title} — {r.plan.km} km</div>
+          <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>{r.plan.zone}</div>
+        </div>
+        <button onClick={() => setOpen(!open)} style={{ ...ghostBtnStyle, padding: '4px 10px', fontSize: 11 }}>
+          {open ? 'Annuler' : 'Marquer fait'}
+        </button>
       </div>
-      <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>En attente Strava</span>
+      {open && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <input type="number" step="0.1" value={km} onChange={e => setKm(e.target.value)}
+            placeholder="Distance parcourue (km)"
+            style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '0.5px solid var(--c-border-med)', background: 'var(--c-bg-2)', color: 'var(--c-text)', fontSize: 12, boxSizing: 'border-box' }} />
+          <textarea value={note} onChange={e => setNote(e.target.value)}
+            placeholder="Note (optionnel)" rows={2}
+            style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '0.5px solid var(--c-border-med)', background: 'var(--c-bg-2)', color: 'var(--c-text)', fontSize: 12, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }} />
+          <button onClick={validate} disabled={busy} style={{ ...primaryBtnStyle, background: 'var(--teal)', color: 'white', padding: '7px' }}>
+            {busy ? '...' : 'Valider la course ✓'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -390,14 +390,20 @@ def update_set(workout_id, set_id):
 @app.post('/api/workouts/<int:workout_id>/complete')
 @require_auth
 def complete_workout(workout_id):
+    data = request.json or {}
+    note = (data.get('note') or '').strip()
+    distance_km = data.get('distance_km')
     with get_db() as db:
         w = db.execute('SELECT * FROM workouts WHERE id=?', (workout_id,)).fetchone()
         if not w or w['user_id'] != g.user_id:
             return jsonify({'error': 'not_found'}), 404
         if w['status'] == 'done':
             return jsonify({'error': 'deja terminee'}), 400
-        db.execute("UPDATE workouts SET status='done', completed_at=? WHERE id=?",
-                   (datetime.utcnow().isoformat(), workout_id))
+        notes = f"manuel {distance_km}km" if (w['kind'] == 'run' and distance_km) else None
+        if note:
+            notes = f"{notes} — {note}" if notes else note
+        db.execute("UPDATE workouts SET status='done', completed_at=?, notes=? WHERE id=?",
+                   (datetime.utcnow().isoformat(), notes, workout_id))
         profile = dict(db.execute('SELECT * FROM profiles WHERE user_id=?', (g.user_id,)).fetchone())
         next_id = None
         if w['kind'] == 'gym':
