@@ -40,6 +40,7 @@ export const api = {
 
   log: (type, value, date) => req('POST', `/log/${type}`, { value, date }),
   logs: () => req('GET', '/logs'),
+  progress: () => req('GET', '/progress'),
 
   stravaAuth: () => req('GET', '/strava/auth'),
   stravaActivities: () => req('GET', '/strava/activities'),

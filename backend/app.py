@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import json
 import logging
@@ -75,6 +76,19 @@ def init_db():
             db.execute('ALTER TABLE workout_sets ADD COLUMN note TEXT')
         except sqlite3.OperationalError:
             pass
+        try:
+            db.execute('ALTER TABLE workouts ADD COLUMN actual_km REAL')
+        except sqlite3.OperationalError:
+            pass
+        else:
+            rows = db.execute(
+                "SELECT id, notes FROM workouts WHERE kind='run' AND status='done' "
+                "AND notes IS NOT NULL").fetchall()
+            for row in rows:
+                m = re.search(r'(\d+(?:\.\d+)?)\s*km', row['notes'])
+                if m:
+                    db.execute('UPDATE workouts SET actual_km=? WHERE id=?',
+                               (float(m.group(1)), row['id']))
     log.info("DB initialized at %s", DB_PATH)
 
 
@@ -399,11 +413,9 @@ def complete_workout(workout_id):
             return jsonify({'error': 'not_found'}), 404
         if w['status'] == 'done':
             return jsonify({'error': 'deja terminee'}), 400
-        notes = f"manuel {distance_km}km" if (w['kind'] == 'run' and distance_km) else None
-        if note:
-            notes = f"{notes} — {note}" if notes else note
-        db.execute("UPDATE workouts SET status='done', completed_at=?, notes=? WHERE id=?",
-                   (datetime.utcnow().isoformat(), notes, workout_id))
+        actual_km = float(distance_km) if (w['kind'] == 'run' and distance_km) else None
+        db.execute("UPDATE workouts SET status='done', completed_at=?, notes=?, actual_km=? WHERE id=?",
+                   (datetime.utcnow().isoformat(), note or None, actual_km, workout_id))
         profile = dict(db.execute('SELECT * FROM profiles WHERE user_id=?', (g.user_id,)).fetchone())
         next_id = None
         if w['kind'] == 'gym':
@@ -416,6 +428,25 @@ def complete_workout(workout_id):
 
 
 # --- Logs (avec date retroactive) ---
+
+@app.get('/api/progress')
+@require_auth
+def progress():
+    since = (datetime.utcnow() - timedelta(days=56)).date().isoformat()
+    with get_db() as db:
+        runs = db.execute(
+            "SELECT completed_at, actual_km FROM workouts WHERE user_id=? AND kind='run' "
+            "AND status='done' AND completed_at >= ? ORDER BY completed_at",
+            (g.user_id, since)).fetchall()
+        gym = db.execute(
+            "SELECT completed_at FROM workouts WHERE user_id=? AND kind='gym' "
+            "AND status='done' AND completed_at >= ? ORDER BY completed_at",
+            (g.user_id, since)).fetchall()
+    return jsonify({
+        'runs': [{'date': r['completed_at'], 'km': r['actual_km']} for r in runs],
+        'gym_sessions': [{'date': r['completed_at']} for r in gym],
+    })
+
 
 @app.post('/api/log/<log_type>')
 @require_auth
@@ -574,8 +605,8 @@ def _auto_validate_runs(user_id, activities):
                 if a['distance_km'] >= target_km * 0.6:
                     db.execute(
                         "UPDATE workouts SET status='done', completed_at=?, "
-                        "notes=? WHERE id=?",
-                        (a['date'], f"strava:{a['id']} {a['distance_km']}km", w['id']))
+                        "notes=?, actual_km=? WHERE id=?",
+                        (a['date'], f"strava:{a['id']}", a['distance_km'], w['id']))
                     used.add(a['id'])
                     validated += 1
                     break

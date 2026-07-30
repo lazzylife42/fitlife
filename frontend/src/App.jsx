@@ -220,6 +220,7 @@ function Main({ me, refreshMe, showToast }) {
 function WorkoutTab({ me, showToast }) {
   const [data, setData] = useState(null)
   const [strava, setStrava] = useState(null)
+  const [progress, setProgress] = useState(null)
   const [busy, setBusy] = useState(false)
   const [openEx, setOpenEx] = useState(null)
   const [sessionNote, setSessionNote] = useState('')
@@ -229,6 +230,7 @@ function WorkoutTab({ me, showToast }) {
       try { setStrava(await api.stravaActivities()) } catch {}
     }
     setData(await api.workouts())
+    try { setProgress(await api.progress()) } catch {}
   }, [me.strava_connected])
 
   useEffect(() => { load() }, [load])
@@ -317,6 +319,13 @@ function WorkoutTab({ me, showToast }) {
         </Card>
       ) : (
         <Card><div style={{ fontSize: 13, color: 'var(--c-text-2)' }}>Aucune séance planifiée.</div></Card>
+      )}
+
+      {progress && (progress.runs.length > 0 || progress.gym_sessions.length > 0) && (
+        <>
+          <div style={{ height: 12 }} />
+          <ProgressCard progress={progress} />
+        </>
       )}
 
       {data.runs.length > 0 && (
@@ -419,6 +428,44 @@ function SetRow({ s, onSave, open, onToggleOpen }) {
         </div>
       )}
     </div>
+  )
+}
+
+function weeklyBuckets(dates, weeks = 6) {
+  const now = new Date()
+  const buckets = Array.from({ length: weeks }, () => 0)
+  dates.forEach(({ date, value }) => {
+    const daysAgo = Math.floor((now - new Date(date)) / 86400000)
+    const idx = weeks - 1 - Math.floor(daysAgo / 7)
+    if (idx >= 0 && idx < weeks) buckets[idx] += (value ?? 1)
+  })
+  return buckets.map((v, i) => ({
+    label: i === weeks - 1 ? 'cette sem.' : `S-${weeks - 1 - i}`,
+    value: Math.round(v * 10) / 10,
+  }))
+}
+
+function ProgressCard({ progress }) {
+  const kmBars = weeklyBuckets(progress.runs.map(r => ({ date: r.date, value: r.km || 0 })))
+  const gymBars = weeklyBuckets(progress.gym_sessions.map(s => ({ date: s.date, value: 1 })))
+  const totalKm = kmBars.reduce((s, b) => s + b.value, 0)
+  const totalGym = gymBars.reduce((s, b) => s + b.value, 0)
+  return (
+    <Card title="Progression — 6 dernières semaines">
+      {totalKm > 0 && (
+        <>
+          <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginBottom: 6 }}>Course ({totalKm.toFixed(1)} km au total)</div>
+          <BarChart bars={kmBars} unit="km" color="var(--teal)" />
+          <div style={{ height: 14 }} />
+        </>
+      )}
+      {totalGym > 0 && (
+        <>
+          <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginBottom: 6 }}>Séances salle ({totalGym})</div>
+          <BarChart bars={gymBars} unit="séances" color="var(--amber)" />
+        </>
+      )}
+    </Card>
   )
 }
 
@@ -579,6 +626,22 @@ function MetricsTab({ showToast }) {
         <div style={{ height: 8 }} />
         <LogInput placeholder="FC repos (bpm)" onLog={v => addLog('fc', v)} unit="bpm" />
       </Card>
+      {logs.poids.length > 1 && (
+        <>
+          <div style={{ height: 12 }} />
+          <Card title="Évolution du poids">
+            <Sparkline points={[...logs.poids].reverse().slice(-20)} unit="kg" />
+          </Card>
+        </>
+      )}
+      {logs.fc.length > 1 && (
+        <>
+          <div style={{ height: 12 }} />
+          <Card title="Évolution FC repos">
+            <Sparkline points={[...logs.fc].reverse().slice(-20)} unit="bpm" color="var(--red)" />
+          </Card>
+        </>
+      )}
       {logs.poids.length > 0 && (
         <>
           <div style={{ height: 12 }} />
@@ -726,6 +789,57 @@ function MetricCard({ label, value, unit }) {
   )
 }
 
+function Sparkline({ points, unit, color = 'var(--teal)' }) {
+  if (!points || points.length < 2) return null
+  const w = 300, h = 80, pad = 6
+  const values = points.map(p => p.value)
+  const min = Math.min(...values), max = Math.max(...values)
+  const range = max - min || 1
+  const step = (w - pad * 2) / (points.length - 1)
+  const coords = values.map((v, i) => [pad + i * step, h - pad - ((v - min) / range) * (h - pad * 2)])
+  const path = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
+  const area = `${path} L${coords[coords.length - 1][0].toFixed(1)},${h - pad} L${coords[0][0].toFixed(1)},${h - pad} Z`
+  const first = points[0], lastPt = points[points.length - 1]
+  const delta = (lastPt.value - first.value)
+  return (
+    <div>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+        <path d={area} fill={color} opacity="0.12" />
+        <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {coords.map(([x, y], i) => (
+          <circle key={i} cx={x} cy={y} r={i === coords.length - 1 ? 3 : 1.6} fill={color} />
+        ))}
+      </svg>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--c-text-3)', marginTop: 4 }}>
+        <span>{new Date(first.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</span>
+        <span style={{ fontWeight: 500, color: delta === 0 ? 'var(--c-text-2)' : delta < 0 ? 'var(--green)' : 'var(--red)' }}>
+          {delta > 0 ? '+' : ''}{delta.toFixed(1)} {unit}
+        </span>
+        <span>{new Date(lastPt.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</span>
+      </div>
+    </div>
+  )
+}
+
+function BarChart({ bars, unit, color = 'var(--teal)' }) {
+  const max = Math.max(...bars.map(b => b.value), 1)
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 90 }}>
+      {bars.map((b, i) => (
+        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+          <div style={{ fontSize: 10, color: 'var(--c-text-3)' }}>{b.value > 0 ? (unit === 'km' ? b.value.toFixed(1) : b.value) : ''}</div>
+          <div style={{
+            width: '100%', maxWidth: 22, borderRadius: 4,
+            height: Math.max(2, (b.value / max) * 56),
+            background: b.value > 0 ? color : 'var(--c-bg-2)',
+          }} />
+          <div style={{ fontSize: 9, color: 'var(--c-text-3)' }}>{b.label}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function Row({ label, value }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '0.5px solid var(--c-border)', fontSize: 13 }}>
@@ -753,8 +867,9 @@ function LogInput({ placeholder, onLog, unit, step = '1' }) {
   return (
     <div style={{ display: 'flex', gap: 8 }}>
       <input type="number" value={val} onChange={e => setVal(e.target.value)} placeholder={placeholder} step={step}
-        onKeyDown={e => e.key === 'Enter' && submit()} style={{ ...inputStyle, flex: 1 }} />
-      <button onClick={submit} style={{ ...ghostBtnStyle, padding: '8px 16px' }}>+ {unit}</button>
+        onKeyDown={e => e.key === 'Enter' && submit()}
+        style={{ ...inputStyle, flex: '1 1 auto', minWidth: 0, width: 'auto' }} />
+      <button onClick={submit} style={{ ...ghostBtnStyle, padding: '8px 16px', flexShrink: 0, whiteSpace: 'nowrap' }}>+ {unit}</button>
     </div>
   )
 }
