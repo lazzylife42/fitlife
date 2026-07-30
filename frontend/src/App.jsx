@@ -18,14 +18,9 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('strava') === 'connected') {
-      showToast('Strava connecté !')
-      window.history.replaceState({}, '', '/')
-    }
     if (!getToken()) { setLoading(false); return }
     refreshMe().finally(() => setLoading(false))
-  }, [refreshMe, showToast])
+  }, [refreshMe])
 
   if (loading) return <Center>Chargement...</Center>
 
@@ -206,7 +201,7 @@ function Main({ me, refreshMe, showToast }) {
         ))}
       </nav>
       <main style={{ padding: '1rem' }}>
-        {tab === 'seance' && <WorkoutTab me={me} showToast={showToast} />}
+        {tab === 'seance' && <WorkoutTab showToast={showToast} />}
         {tab === 'exos' && <ExercisesTab />}
         {tab === 'metrics' && <MetricsTab showToast={showToast} />}
         {tab === 'profil' && <ProfileTab me={me} refreshMe={refreshMe} showToast={showToast} />}
@@ -217,21 +212,17 @@ function Main({ me, refreshMe, showToast }) {
 
 // ============ Séance ============
 
-function WorkoutTab({ me, showToast }) {
+function WorkoutTab({ showToast }) {
   const [data, setData] = useState(null)
-  const [strava, setStrava] = useState(null)
   const [progress, setProgress] = useState(null)
   const [busy, setBusy] = useState(false)
   const [openEx, setOpenEx] = useState(null)
   const [sessionNote, setSessionNote] = useState('')
 
   const load = useCallback(async () => {
-    if (me.strava_connected) {
-      try { setStrava(await api.stravaActivities()) } catch {}
-    }
     setData(await api.workouts())
     try { setProgress(await api.progress()) } catch {}
-  }, [me.strava_connected])
+  }, [])
 
   useEffect(() => { load() }, [load])
 
@@ -337,23 +328,6 @@ function WorkoutTab({ me, showToast }) {
               À valider manuellement une fois la course faite.
             </div>
             {w?.plan?.run_advice && <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginTop: 4 }}>{w.plan.run_advice}</div>}
-          </Card>
-        </>
-      )}
-
-      {strava && (
-        <>
-          <div style={{ height: 12 }} />
-          <Card title={`Strava — ${strava.total_km_week} km cette semaine`}>
-            {strava.activities.slice(0, 6).map(a => (
-              <div key={a.id} style={{ fontSize: 12, padding: '5px 0', borderTop: '0.5px solid var(--c-border)', display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--c-text-2)' }}>
-                  <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 20, background: a.type === 'Run' ? 'var(--teal-light)' : 'var(--c-bg-2)', color: a.type === 'Run' ? 'var(--teal)' : 'var(--c-text-3)', fontWeight: 500, marginRight: 5 }}>{a.type}</span>
-                  {new Date(a.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' })}
-                </span>
-                <span style={{ fontWeight: 500 }}>{a.distance_km}km {a.avg_hr ? `· ${Math.round(a.avg_hr)}bpm` : ''}</span>
-              </div>
-            ))}
           </Card>
         </>
       )}
@@ -692,13 +666,6 @@ function ProfileTab({ me, refreshMe, showToast }) {
     } finally { setSavingExcl(false) }
   }
 
-  const connectStrava = async () => {
-    try {
-      const { url } = await api.stravaAuth()
-      window.location.href = url
-    } catch (e) { showToast(e.message, 'err') }
-  }
-
   if (editing) return <Onboarding initial={p} onDone={async () => { setEditing(false); await refreshMe() }} showToast={showToast} onCancel={() => setEditing(false)} />
 
   const labels = {
@@ -746,16 +713,6 @@ function ProfileTab({ me, refreshMe, showToast }) {
         <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 8 }}>
           Rouge = exclu du programme.
         </div>
-      </Card>
-      <div style={{ height: 12 }} />
-      <Card title="Strava">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div style={{ fontSize: 12, color: 'var(--c-text-2)' }}>Import automatique des activités</div>
-          <StatusDot connected={me.strava_connected} />
-        </div>
-        <button onClick={connectStrava} style={ghostBtnStyle}>
-          {me.strava_connected ? 'Reconnecter Strava ↗' : 'Connecter Strava ↗'}
-        </button>
       </Card>
       <div style={{ height: 12 }} />
       <button onClick={() => { clearToken(); window.location.reload() }} style={{ ...ghostBtnStyle, width: '100%', color: 'var(--red)' }}>
@@ -849,15 +806,6 @@ function Row({ label, value }) {
   )
 }
 
-function StatusDot({ connected }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: connected ? 'var(--green)' : 'var(--c-text-3)' }}>
-      <div style={{ width: 8, height: 8, borderRadius: '50%', background: connected ? 'var(--green)' : 'var(--c-border-med)' }} />
-      {connected ? 'Connecté' : 'Non connecté'}
-    </div>
-  )
-}
-
 function LogInput({ placeholder, onLog, unit, step = '1' }) {
   const [val, setVal] = useState('')
   const submit = async () => {
@@ -865,11 +813,11 @@ function LogInput({ placeholder, onLog, unit, step = '1' }) {
     if (ok) setVal('')
   }
   return (
-    <div style={{ display: 'flex', gap: 8 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
       <input type="number" value={val} onChange={e => setVal(e.target.value)} placeholder={placeholder} step={step}
         onKeyDown={e => e.key === 'Enter' && submit()}
-        style={{ ...inputStyle, flex: '1 1 auto', minWidth: 0, width: 'auto' }} />
-      <button onClick={submit} style={{ ...ghostBtnStyle, padding: '8px 16px', flexShrink: 0, whiteSpace: 'nowrap' }}>+ {unit}</button>
+        style={{ ...inputStyle, width: '100%', minWidth: 0 }} />
+      <button onClick={submit} style={{ ...ghostBtnStyle, padding: '8px 16px', whiteSpace: 'nowrap' }}>+ {unit}</button>
     </div>
   )
 }

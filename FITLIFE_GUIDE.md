@@ -42,7 +42,7 @@ Terminer la séance
   ├─> plan FALLBACK créé immédiatement (déterministe, l'app marche toujours)
   ├─> job ajouté dans une QUEUE (table SQL)
   └─> worker (toutes les 2 min) : si Ollama joignable
-        ├─> construit le CONTEXTE (profil + historique + métriques + Strava)
+        ├─> construit le CONTEXTE (profil + historique + métriques)
         ├─> appelle le LLM avec un schéma JSON forcé
         ├─> VALIDE strictement la réponse (sinon retry)
         └─> remplace le plan fallback → badge "coach IA"
@@ -96,7 +96,6 @@ avec deux services vides (nginx + python) qui communiquent par nom de service.
 | `workouts` | séances (plan JSON + statut) | hybride relationnel/document |
 | `workout_sets` | réalisé par exo (charges, done) | détail 1-N, cible vs réalisé |
 | `logs` | poids/FC par jour | série temporelle simple |
-| `oauth_tokens` | tokens Strava | PK composite (user_id, provider) |
 | `generation_jobs` | queue IA | une queue N'EST QU'une table + un statut |
 
 ### 💡 Rationale des choix
@@ -136,30 +135,27 @@ la dernière charge réalisée par exercice (pas de `QUALIFY` en SQLite → sous
 ### 🎯 Design de l'API
 ```
 POST /api/auth/register, /api/auth/login      → {token}
-GET  /api/me                                  → user + profile + strava_connected
+GET  /api/me                                  → user + profile
 POST /api/profile                             → QCM (validation par sets de valeurs)
 POST /api/profile/exclusions                  → toggles matériel + régénération
 GET  /api/exercises?q=&category=              → bibliothèque (LIMIT 100)
 GET  /api/exercises/<id>/fr                   → trad FR lazy + cache
 GET  /api/workouts                            → next + runs + history + ai_pending
 POST /api/workouts/generate                   → première séance
-POST /api/workouts/<id>/sets/<set_id>         → saisie charge/done
-POST /api/workouts/<id>/complete              → done + fallback + job
+POST /api/workouts/<id>/sets/<set_id>         → saisie charge/done + note
+POST /api/workouts/<id>/complete              → done + fallback + job (note, distance_km pour les courses)
 POST /api/workouts/mode                       → gym <-> travel
 POST /api/log/<type>                          → log daté (rétroactif)
-GET  /api/strava/auth, /callback, /activities → OAuth + auto-validation runs
+GET  /api/progress                            → km course + séances salle (8 semaines)
 GET  /api/health                              → {ok, ollama}
 ```
 
 ### 💡 Rationales à retenir
 - **Validation stricte en entrée**, jamais de fallback silencieux.
-- **Les codes HTTP portent du sens côté client** : bug réel où `/strava/activities`
-  renvoyait 401 (Strava non connecté) → le front interprétait "session expirée" →
-  purge du JWT → déconnexion sauvage. Fix : 409. 401 = QUI es-tu, 403 = pas le DROIT,
-  4xx métier = état.
-- **OAuth avec `state`** : le callback arrive sans header Authorization → un JWT court
-  dans le `state` transporte l'identité. Anti-CSRF + identification en un mécanisme.
-- **Refresh token** : marge de 5 min avant expiration, persister le nouveau couple.
+- **Les codes HTTP portent du sens côté client** : un endpoint métier qui répond 401
+  alors que le vrai problème est un état ("service tiers non connecté") fait purger
+  le JWT côté front par erreur → déconnexion sauvage. Réserver 401 à "QUI es-tu",
+  403 à "pas le DROIT", et un 4xx métier dédié (ex. 409) à un état applicatif.
 
 ### 📝 Défi de rebuild
 Register/login/`@require_auth` sans regarder. Un token modifié d'un caractère → 401 ;
@@ -242,20 +238,25 @@ chaque interaction toaste au lieu de crasher.
 
 ## Phase 7 — Intégrations externes
 
-- **Strava OAuth2** (authorization code) : le secret ne touche jamais le navigateur.
-- **Auto-validation des courses** : run Strava ≥ 60% du km cible → done, appairage
-  greedy 1-1, activité tracée en notes. *Quand une donnée peut être vérifiée par une
-  source externe fiable, ne demande pas à l'humain.*
 - **Import dataset** : filtre équipement, copie médias, upsert idempotent.
 - **Traduction batch** : commit par exo (resumable), ETA loggée. Pattern de backfill.
+- **Course sans source externe** : la distance parcourue est saisie manuellement par
+  l'utilisateur (`POST /workouts/<id>/complete` avec `distance_km`), stockée en colonne
+  typée (`workouts.actual_km`) plutôt que dans un champ texte libre — *ce que tu
+  requêtes → colonnes*.
+
+  ⚠️ **Historique** : une intégration Strava (OAuth2 + auto-validation des courses
+  ≥60% du km cible) a existé ici, mais Strava a fermé son API aux comptes gratuits
+  (403 "Application Inactive" sans abonnement payant) — elle a été retirée du code.
+  Leçon : une dépendance à une API tierce gratuite n'est jamais garantie dans le temps ;
+  prévoir un chemin de repli manuel dès le départ évite de tout recâbler en urgence.
 
 ---
 
-## Phase 8 — Debug méthodique : les 6 vraies pannes du projet
+## Phase 8 — Debug méthodique : les 5 vraies pannes du projet
 
 | Symptôme | Cause réelle | Leçon |
 |---|---|---|
-| Déconnexion après connexion Strava | endpoint métier renvoyait 401 → le front purgeait le JWT | les codes HTTP sont un contrat client/serveur |
 | Plans IA débiles (ids 0001-0003) | prompt > num_ctx 4096, tronqué silencieusement | vérifier ce que le modèle VOIT vraiment |
 | "model qwen3:14bb not found" | typo dans .env | lire le message d'erreur littéralement avant de théoriser |
 | Cross-over revenu malgré le filtre | validation contre toute la DB, le modèle recopiait l'historique | valider contre ce qu'on a PROPOSÉ, pas contre ce qui EXISTE |
@@ -274,7 +275,7 @@ container, SELECT, logs bruts) → fix minimal → vérifier → commit.
    en salle SANS IA ni front.
 3. **Front** : SPA, auth flow, onboarding, séance optimistic, build + Nginx.
 4. **IA** : client Ollama + schéma + num_ctx, validation en couches, queue + retry.
-5. **Intégrations** : OAuth Strava, auto-validation, traduction, exclusions, tunnel.
+5. **Intégrations** : traduction, exclusions, tunnel.
 
 Règle : à chaque étape, écris D'ABORD sans regarder, puis diffe avec l'original.
 C'est le diff qui t'apprend.
@@ -291,8 +292,6 @@ C'est le diff qui t'apprend.
 | SQLite UPSERT | https://www.sqlite.org/lang_upsert.html |
 | APScheduler | https://apscheduler.readthedocs.io/ |
 | Ollama API + structured outputs | https://github.com/ollama/ollama/blob/main/docs/api.md |
-| OAuth2 authorization code | https://www.oauth.com/oauth2-servers/server-side-apps/authorization-code/ |
-| Strava API | https://developers.strava.com/docs/ |
 | React (hooks) | https://react.dev/reference/react |
 | Vite | https://vitejs.dev/guide/ |
 | Nginx reverse proxy | https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/ |
@@ -320,9 +319,6 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       DB_PATH: /data/fitlife.db
       CORS_ORIGINS: https://fit.sabinomonte.ch
-      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
-      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
-      STRAVA_REDIRECT_URI: https://fit.sabinomonte.ch/api/strava/callback
       OLLAMA_URL: ${OLLAMA_URL:-http://192.168.1.14:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b}
       OLLAMA_TRANSLATE_MODEL: ${OLLAMA_TRANSLATE_MODEL:-mistral:7b}
@@ -360,8 +356,6 @@ volumes:
 - `${SECRET_KEY}` sans défaut — si absent du `.env`, compose passe une chaîne vide et
   le backend **crash volontairement au boot** (voir app.py). Fail fast : mieux qu'une
   app qui tourne avec une clé vide.
-- `${STRAVA_CLIENT_ID:-}` avec défaut vide — Strava est optionnel, l'app doit démarrer
-  sans. La différence entre "requis" et "optionnel" est encodée dans la syntaxe.
 - `expose: 5000` vs `ports: 3010:80` — le backend n'est PAS publié sur l'hôte. Seul
   Nginx le joint via le réseau Docker interne (par son nom `fitlife-backend`). Un seul
   point d'entrée = surface d'attaque minimale, et c'est ce port unique que le tunnel
@@ -540,16 +534,6 @@ CREATE TABLE IF NOT EXISTS logs (
     date TEXT NOT NULL               -- YYYY-MM-DD (retroactif via date picker)
 );
 CREATE INDEX IF NOT EXISTS idx_logs_user ON logs(user_id, type, date);
-
-CREATE TABLE IF NOT EXISTS oauth_tokens (
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    provider TEXT NOT NULL,          -- strava
-    access_token TEXT,
-    refresh_token TEXT,
-    expires_at TEXT,
-    raw TEXT,
-    PRIMARY KEY (user_id, provider)
-);
 
 CREATE TABLE IF NOT EXISTS generation_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -819,129 +803,36 @@ fallback — l'utilisateur n'attend jamais l'IA, (3) le job est en queue. Le gua
 `status == 'done'` rend l'endpoint idempotent côté effet (double-clic sur le bouton =
 un seul enchaînement).
 
-## 3.6 OAuth Strava — les trois moments
+## 3.6 Validation manuelle des courses
 
-**Moment 1 : construire l'URL d'autorisation (avec le state)**
+Pas de source externe fiable (voir Phase 7) : l'utilisateur saisit lui-même la
+distance parcourue.
 
 ```python
-@app.get('/api/strava/auth')
+@app.post('/api/workouts/<int:workout_id>/complete')
 @require_auth
-def strava_auth():
-    if not STRAVA_CLIENT_ID:
-        return jsonify({'error': 'Strava not configured'}), 500
-    state = make_token(g.user_id, ttl_days=1)
-    url = (f"https://www.strava.com/oauth/authorize?client_id={STRAVA_CLIENT_ID}"
-           f"&redirect_uri={STRAVA_REDIRECT_URI}&response_type=code"
-           f"&scope=read,activity:read_all&state={state}")
-    return jsonify({'url': url})
-```
-
-Le point subtil : `state = make_token(g.user_id, ttl_days=1)`. Quand Strava
-redirigera vers notre callback, la requête viendra du navigateur SANS header
-Authorization. Le `state` (que Strava renvoie tel quel) transporte l'identité, signée
-et à durée courte. Un seul mécanisme = anti-CSRF + identification.
-
-**Moment 2 : le callback (échange code → tokens)**
-
-```python
-@app.get('/api/strava/callback')
-def strava_callback():
-    code = request.args.get('code')
-    state = request.args.get('state', '')
-    try:
-        user_id = jwt.decode(state, SECRET_KEY, algorithms=[JWT_ALGO])['uid']
-    except jwt.PyJWTError:
-        return "Invalid state", 400
-    if not code:
-        return "Missing code", 400
-    resp = requests.post('https://www.strava.com/oauth/token', data={
-        'client_id': STRAVA_CLIENT_ID, 'client_secret': STRAVA_CLIENT_SECRET,
-        'code': code, 'grant_type': 'authorization_code'})
-    if not resp.ok:
-        return "Strava auth failed", 400
-    tokens = resp.json()
-    expires_at = datetime.utcfromtimestamp(tokens['expires_at']).isoformat()
+def complete_workout(workout_id):
+    data = request.json or {}
+    note = (data.get('note') or '').strip()
+    distance_km = data.get('distance_km')
     with get_db() as db:
-        db.execute('INSERT OR REPLACE INTO oauth_tokens VALUES (?, ?, ?, ?, ?, ?)',
-                   (user_id, 'strava', tokens['access_token'], tokens['refresh_token'],
-                    expires_at, json.dumps(tokens)))
-    return redirect('/?strava=connected')
+        w = db.execute('SELECT * FROM workouts WHERE id=?', (workout_id,)).fetchone()
+        if not w or w['user_id'] != g.user_id:
+            return jsonify({'error': 'not_found'}), 404
+        if w['status'] == 'done':
+            return jsonify({'error': 'deja terminee'}), 400
+        actual_km = float(distance_km) if (w['kind'] == 'run' and distance_km) else None
+        db.execute("UPDATE workouts SET status='done', completed_at=?, notes=?, actual_km=? WHERE id=?",
+                   (datetime.utcnow().isoformat(), note or None, actual_km, workout_id))
+        ...
 ```
 
-- L'échange `code` → tokens se fait **serveur à serveur** avec le `client_secret` :
-  le secret ne transite jamais par le navigateur. C'est toute la raison d'être du flow
-  authorization code.
-- `redirect('/?strava=connected')` : on renvoie l'utilisateur sur la SPA avec un query
-  param que le front lit une fois (toast) puis efface de l'URL.
-- Ce handler n'a PAS `@require_auth` — c'est le state qui authentifie.
+- Même endpoint pour gym et run : `distance_km` n'est appliqué que si `kind == 'run'`,
+  `note` est libre dans les deux cas (ex: "fait aux haltères, pas de machine dispo").
+- `actual_km` est une colonne typée (pas du texte dans `notes`) : c'est ce qui permet
+  d'agréger par semaine pour `/api/progress` sans parser de string.
 
-**Moment 3 : le refresh automatique**
-
-```python
-def get_strava_token(user_id):
-    with get_db() as db:
-        row = db.execute(
-            "SELECT * FROM oauth_tokens WHERE user_id=? AND provider='strava'",
-            (user_id,)).fetchone()
-    if not row:
-        return None
-    if datetime.utcnow() >= datetime.fromisoformat(row['expires_at']) - timedelta(minutes=5):
-        resp = requests.post('https://www.strava.com/oauth/token', data={
-            'client_id': STRAVA_CLIENT_ID, 'client_secret': STRAVA_CLIENT_SECRET,
-            'refresh_token': row['refresh_token'], 'grant_type': 'refresh_token'})
-        if not resp.ok:
-            return None
-        tokens = resp.json()
-        # ... persiste le nouveau couple access+refresh, retourne l'access
-    return row['access_token']
-```
-
-La marge de 5 minutes (`expires_at - 5min`) évite la course où le token expire ENTRE
-notre check et l'appel API. Les refresh tokens Strava tournent aussi (rotation) : on
-persiste toujours le nouveau couple, jamais juste l'access.
-
-## 3.7 Auto-validation des courses
-
-```python
-def _auto_validate_runs(user_id, activities):
-    validated = 0
-    today = datetime.utcnow().date()
-    monday = today - timedelta(days=today.weekday())
-    runs = [a for a in activities if a['type'] == 'Run']
-    with get_db() as db:
-        planned = db.execute(
-            "SELECT id, plan_json FROM workouts WHERE user_id=? AND kind='run' "
-            "AND status='planned' AND scheduled_date >= ? ORDER BY id",
-            (user_id, monday.isoformat())).fetchall()
-        used = set()
-        for w in planned:
-            target_km = json.loads(w['plan_json']).get('km', 0)
-            for a in runs:
-                if a['id'] in used:
-                    continue
-                if a['distance_km'] >= target_km * 0.6:
-                    db.execute(
-                        "UPDATE workouts SET status='done', completed_at=?, notes=? WHERE id=?",
-                        (a['date'], f"strava:{a['id']} {a['distance_km']}km", w['id']))
-                    used.add(a['id'])
-                    validated += 1
-                    break
-    return validated
-```
-
-- Appairage **greedy 1-1** : une activité Strava ne valide qu'UNE course planifiée
-  (le set `used`) et vice-versa (le `break`). Sans ça, un run de 10 km validerait les
-  deux sorties de 5 km de la semaine.
-- Seuil 60% : tolère "j'ai visé 5, j'ai fait 3.5", rejette "j'ai marché 800 m".
-  Une constante métier discutable = à exposer en config un jour.
-- `notes = "strava:12345 4.8km"` : traçabilité. Quand tu te demanderas "pourquoi
-  cette course est done ?", la réponse est dans la ligne.
-- Déclenché depuis `GET /api/strava/activities` (= à chaque ouverture de l'onglet
-  Séance) plutôt que par un cron : zéro appel API Strava quand personne ne regarde,
-  et le résultat est visible immédiatement. Trade-off assumé : pas de validation tant
-  que l'app n'est pas ouverte.
-
-## 3.8 Le worker
+## 3.7 Le worker
 
 ```python
 def process_generation_jobs():
@@ -953,10 +844,8 @@ def process_generation_jobs():
             "SELECT * FROM generation_jobs WHERE status='pending' ORDER BY id LIMIT 5").fetchall()
         for job in jobs:
             try:
-                strava = fetch_strava_week(job['user_id'])
                 plan = coach.ollama_generate_gym_plan(
                     db, job['user_id'],
-                    strava_activities=strava['activities'] if strava else [],
                     mode=job['mode'] if 'mode' in job.keys() else 'gym')
                 target = db.execute(
                     "SELECT id FROM workouts WHERE user_id=? AND status='planned' "
@@ -1192,10 +1081,9 @@ PLAN_SCHEMA = {
     'required': ['title', 'exercises', 'advice'],
 }
 
-def ollama_generate_gym_plan(db, user_id, strava_activities=None, mode='gym'):
+def ollama_generate_gym_plan(db, user_id, mode='gym'):
     profile = dict(db.execute('SELECT * FROM profiles WHERE user_id=?', (user_id,)).fetchone())
     context = build_context(db, user_id)
-    context['strava'] = strava_activities or []
     # ... pool selon mode (gym filtre / travel = body weight only)
 
     pool_lines = '\n'.join(
@@ -1205,7 +1093,6 @@ def ollama_generate_gym_plan(db, user_id, strava_activities=None, mode='gym'):
         f"HISTORIQUE SEANCES (recentes d'abord, cible vs realise):\n"
         f"{json.dumps(context['history'][:4], ensure_ascii=False)}\n\n"
         f"METRIQUES (poids, fc repos):\n{json.dumps(context['logs'][:14], ensure_ascii=False)}\n\n"
-        f"ACTIVITES STRAVA CETTE SEMAINE:\n{json.dumps(context['strava'], ensure_ascii=False)}\n\n"
         f"POOL D'EXERCICES (id | nom | groupe | equipement):\n{pool_lines}\n\n"
         f"{constraint}"
         "TACHE: genere la prochaine seance en JSON. Choisis EXACTEMENT 5 exercices du POOL "
@@ -1386,11 +1273,10 @@ export const api = {
   generateWorkout: () => req('POST', '/workouts/generate'),
   setMode: (mode) => req('POST', '/workouts/mode', { mode }),
   updateSet: (workoutId, setId, data) => req('POST', `/workouts/${workoutId}/sets/${setId}`, data),
-  completeWorkout: (workoutId) => req('POST', `/workouts/${workoutId}/complete`),
+  completeWorkout: (workoutId, data = {}) => req('POST', `/workouts/${workoutId}/complete`, data),
   log: (type, value, date) => req('POST', `/log/${type}`, { value, date }),
   logs: () => req('GET', '/logs'),
-  stravaAuth: () => req('GET', '/strava/auth'),
-  stravaActivities: () => req('GET', '/strava/activities'),
+  progress: () => req('GET', '/progress'),
 }
 ```
 
@@ -1399,10 +1285,9 @@ export const api = {
   ajouter un endpoint = une ligne.
 - `if (r.status === 401 && !path.startsWith('/auth/'))` : un 401 = session invalide →
   purge + reload (retour à l'écran de login). L'exception `/auth/` évite la boucle :
-  un mauvais mot de passe au login est AUSSI un 401 mais ne doit pas reload. Et c'est
-  cette ligne qui a causé le bug Strava : le backend renvoyait 401 pour "Strava non
-  connecté" → déconnexion sauvage → fix côté backend (409). Le contrat des codes HTTP
-  se lit DES DEUX côtés.
+  un mauvais mot de passe au login est AUSSI un 401 mais ne doit pas reload. Un endpoint
+  métier qui répond 401 pour un état applicatif (plutôt qu'un vrai problème d'identité)
+  déclenche cette purge par erreur : le contrat des codes HTTP se lit DES DEUX côtés.
 - `throw new Error(data.error || ...)` : le message d'erreur du backend (en français)
   remonte tel quel dans les toasts.
 - localStorage vs cookie httpOnly : localStorage est vulnérable au XSS mais simple ;
@@ -1422,14 +1307,9 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('strava') === 'connected') {
-      showToast('Strava connecté !')
-      window.history.replaceState({}, '', '/')
-    }
     if (!getToken()) { setLoading(false); return }
     refreshMe().finally(() => setLoading(false))
-  }, [refreshMe, showToast])
+  }, [refreshMe])
 
   if (loading) return <Center>Chargement...</Center>
   return (
@@ -1449,8 +1329,6 @@ export default function App() {
   login ; me sans profil → onboarding ; sinon → app. Chaque transition = un
   `refreshMe()`. Quand tu recodes, commence PAR cette machine à états, le reste
   s'accroche dessus.
-- Le retour de l'OAuth Strava (`/?strava=connected`) est consommé au mount : toast +
-  `history.replaceState` pour nettoyer l'URL (sinon un refresh re-toaste).
 - `maxWidth: 480` : l'app est mobile-first par construction — sur desktop c'est une
   colonne centrée, sur téléphone c'est plein écran. Un seul layout à maintenir.
 
@@ -1630,9 +1508,8 @@ puis diffé contre lui :
 - [ ] make_token / require_auth / register / login (3.2) — teste les 401 au curl
 - [ ] un endpoint scoped avec vérification de propriété (3.3)
 - [ ] _create/_replace plan + complete_workout (3.4, 3.5)
-- [ ] OAuth Strava complet avec state (3.6) — dessine le diagramme des 3 moments avant
-- [ ] auto-validation runs (3.7) — écris d'abord les cas limites (2 runs, run trop court)
-- [ ] worker + retry + last_error (3.8) — simule Ollama down
+- [ ] validation manuelle des courses, note libre (3.6)
+- [ ] worker + retry + last_error (3.7) — simule Ollama down
 - [ ] filtres + pool + fallback avec surcharge progressive (4.1-4.3)
 - [ ] appel Ollama : schéma + num_ctx + think:false (4.4)
 - [ ] les 7 couches de validation (4.5) — sans regarder, puis compte celles oubliées

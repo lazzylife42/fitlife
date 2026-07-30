@@ -10,9 +10,6 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       DB_PATH: /data/fitlife.db
       CORS_ORIGINS: https://fit.sabinomonte.ch
-      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
-      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
-      STRAVA_REDIRECT_URI: https://fit.sabinomonte.ch/api/strava/callback
       OLLAMA_URL: ${OLLAMA_URL:-http://192.168.1.14:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b}
     volumes:

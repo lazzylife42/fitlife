@@ -72,16 +72,6 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 CREATE INDEX IF NOT EXISTS idx_logs_user ON logs(user_id, type, date);
 
-CREATE TABLE IF NOT EXISTS oauth_tokens (
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    provider TEXT NOT NULL,          -- strava
-    access_token TEXT,
-    refresh_token TEXT,
-    expires_at TEXT,
-    raw TEXT,
-    PRIMARY KEY (user_id, provider)
-);
-
 CREATE TABLE IF NOT EXISTS generation_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id),

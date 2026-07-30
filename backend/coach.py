@@ -275,7 +275,7 @@ def plan_missing_runs(db, user_id, profile):
 SYSTEM_PROMPT = (
     "Tu es un coach fitness francophone. Tu recois le profil d'un utilisateur, son historique "
     "de seances (charges cibles vs realisees), ses metriques (poids, FC repos), "
-    "ses activites Strava recentes, et un pool d'exercices disponibles.\n"
+    "et un pool d'exercices disponibles.\n"
     "Genere la PROCHAINE seance. Reponds UNIQUEMENT en JSON valide avec cette structure:\n"
     '{"title": "string", "exercises": [{"id": "id du pool", "sets": int, '
     '"reps": "string", "weight": number ou null}], '
@@ -295,7 +295,7 @@ SYSTEM_PROMPT = (
     "Evite les exercices necessitant une double poulie (cross-over, cable fly, raises au cable) "
     "et les exercices exotiques ou acrobatiques.\n"
     "- advice = 2-3 phrases d'analyse personnalisee basee sur l'historique et les metriques.\n"
-    "- Si la FC de repos monte ou fatigue visible dans Strava, reduis le volume."
+    "- Si la FC de repos monte ou fatigue visible dans les metriques, reduis le volume."
 )
 
 
@@ -353,11 +353,10 @@ PLAN_SCHEMA = {
 }
 
 
-def ollama_generate_gym_plan(db, user_id, strava_activities=None, mode='gym'):
+def ollama_generate_gym_plan(db, user_id, mode='gym'):
     """Appelle Ollama. Raise en cas d'echec (le worker gere le retry)."""
     profile = dict(db.execute('SELECT * FROM profiles WHERE user_id=?', (user_id,)).fetchone())
     context = build_context(db, user_id)
-    context['strava'] = strava_activities or []
     if mode == 'travel':
         rows = db.execute(
             "SELECT id, name, category, equipment, target FROM exercises "
@@ -380,7 +379,6 @@ def ollama_generate_gym_plan(db, user_id, strava_activities=None, mode='gym'):
         f"HISTORIQUE SEANCES (recentes d'abord, cible vs realise):\n"
         f"{json.dumps(context['history'][:4], ensure_ascii=False)}\n\n"
         f"METRIQUES (poids, fc repos):\n{json.dumps(context['logs'][:14], ensure_ascii=False)}\n\n"
-        f"ACTIVITES STRAVA CETTE SEMAINE:\n{json.dumps(context['strava'], ensure_ascii=False)}\n\n"
         f"POOL D'EXERCICES (id | nom | groupe | equipement):\n{pool_lines}\n\n"
         f"{constraint}"
         "TACHE: genere la prochaine seance en JSON. Choisis EXACTEMENT 5 exercices du POOL "

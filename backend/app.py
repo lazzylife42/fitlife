@@ -7,8 +7,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 import jwt
-import requests
-from flask import Flask, request, jsonify, redirect, g
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -36,9 +35,7 @@ def _media_if_exists(url):
         return None
     rel = url.replace('/media/', '', 1)
     return url if os.path.isfile(os.path.join(MEDIA_ROOT, rel)) else None
-STRAVA_CLIENT_ID = os.environ.get('STRAVA_CLIENT_ID')
-STRAVA_CLIENT_SECRET = os.environ.get('STRAVA_CLIENT_SECRET')
-STRAVA_REDIRECT_URI = os.environ.get('STRAVA_REDIRECT_URI', 'https://fit.sabinomonte.ch/api/strava/callback')
+
 
 JWT_ALGO = 'HS256'
 JWT_TTL_DAYS = 30
@@ -150,11 +147,7 @@ def me():
     with get_db() as db:
         user = db.execute('SELECT id, email FROM users WHERE id=?', (g.user_id,)).fetchone()
         profile = db.execute('SELECT * FROM profiles WHERE user_id=?', (g.user_id,)).fetchone()
-        strava = db.execute(
-            "SELECT 1 FROM oauth_tokens WHERE user_id=? AND provider='strava'",
-            (g.user_id,)).fetchone()
-    return jsonify({'user': dict(user), 'profile': dict(profile) if profile else None,
-                    'strava_connected': strava is not None})
+    return jsonify({'user': dict(user), 'profile': dict(profile) if profile else None})
 
 
 # --- Profil (QCM) ---
@@ -505,125 +498,6 @@ def exercise_fr(ex_id):
     return jsonify({'instructions_fr': fr, 'cached': False})
 
 
-# --- Strava (par user) ---
-
-@app.get('/api/strava/auth')
-@require_auth
-def strava_auth():
-    if not STRAVA_CLIENT_ID:
-        return jsonify({'error': 'Strava not configured'}), 500
-    state = make_token(g.user_id, ttl_days=1)
-    url = (f"https://www.strava.com/oauth/authorize?client_id={STRAVA_CLIENT_ID}"
-           f"&redirect_uri={STRAVA_REDIRECT_URI}&response_type=code"
-           f"&scope=read,activity:read_all&state={state}")
-    return jsonify({'url': url})
-
-
-@app.get('/api/strava/callback')
-def strava_callback():
-    code = request.args.get('code')
-    state = request.args.get('state', '')
-    try:
-        user_id = jwt.decode(state, SECRET_KEY, algorithms=[JWT_ALGO])['uid']
-    except jwt.PyJWTError:
-        return "Invalid state", 400
-    if not code:
-        return "Missing code", 400
-    resp = requests.post('https://www.strava.com/oauth/token', data={
-        'client_id': STRAVA_CLIENT_ID, 'client_secret': STRAVA_CLIENT_SECRET,
-        'code': code, 'grant_type': 'authorization_code'})
-    if not resp.ok:
-        return "Strava auth failed", 400
-    tokens = resp.json()
-    expires_at = datetime.utcfromtimestamp(tokens['expires_at']).isoformat()
-    with get_db() as db:
-        db.execute('INSERT OR REPLACE INTO oauth_tokens VALUES (?, ?, ?, ?, ?, ?)',
-                   (user_id, 'strava', tokens['access_token'], tokens['refresh_token'],
-                    expires_at, json.dumps(tokens)))
-    return redirect('/?strava=connected')
-
-
-def get_strava_token(user_id):
-    with get_db() as db:
-        row = db.execute(
-            "SELECT * FROM oauth_tokens WHERE user_id=? AND provider='strava'",
-            (user_id,)).fetchone()
-    if not row:
-        return None
-    if datetime.utcnow() >= datetime.fromisoformat(row['expires_at']) - timedelta(minutes=5):
-        resp = requests.post('https://www.strava.com/oauth/token', data={
-            'client_id': STRAVA_CLIENT_ID, 'client_secret': STRAVA_CLIENT_SECRET,
-            'refresh_token': row['refresh_token'], 'grant_type': 'refresh_token'})
-        if not resp.ok:
-            return None
-        tokens = resp.json()
-        expires_at = datetime.utcfromtimestamp(tokens['expires_at']).isoformat()
-        with get_db() as db:
-            db.execute('INSERT OR REPLACE INTO oauth_tokens VALUES (?, ?, ?, ?, ?, ?)',
-                       (user_id, 'strava', tokens['access_token'], tokens['refresh_token'],
-                        expires_at, json.dumps(tokens)))
-        return tokens['access_token']
-    return row['access_token']
-
-
-def fetch_strava_week(user_id):
-    token = get_strava_token(user_id)
-    if not token:
-        return None
-    today = datetime.utcnow().date()
-    monday = today - timedelta(days=today.weekday())
-    after = int(datetime(monday.year, monday.month, monday.day).timestamp())
-    resp = requests.get('https://www.strava.com/api/v3/athlete/activities',
-                        headers={'Authorization': f'Bearer {token}'},
-                        params={'after': after, 'per_page': 30})
-    if not resp.ok:
-        return None
-    activities = [{'id': a['id'], 'name': a['name'], 'date': a['start_date_local'],
-                   'distance_km': round(a['distance'] / 1000, 2),
-                   'duration_s': a['moving_time'], 'avg_hr': a.get('average_heartrate'),
-                   'max_hr': a.get('max_heartrate'), 'type': a['sport_type']}
-                  for a in resp.json()]
-    total_km = round(sum(a['distance_km'] for a in activities if a['type'] == 'Run'), 2)
-    return {'activities': activities, 'total_km_week': total_km}
-
-
-def _auto_validate_runs(user_id, activities):
-    """Valide les courses planifiees de la semaine avec les runs Strava (>= 60% du km cible)."""
-    validated = 0
-    runs = [a for a in activities if a['type'] == 'Run']
-    with get_db() as db:
-        planned = db.execute(
-            "SELECT id, plan_json FROM workouts WHERE user_id=? AND kind='run' "
-            "AND status='planned' ORDER BY id",
-            (user_id,)).fetchall()
-        used = set()
-        for w in planned:
-            target_km = json.loads(w['plan_json']).get('km', 0)
-            for a in runs:
-                if a['id'] in used:
-                    continue
-                if a['distance_km'] >= target_km * 0.6:
-                    db.execute(
-                        "UPDATE workouts SET status='done', completed_at=?, "
-                        "notes=?, actual_km=? WHERE id=?",
-                        (a['date'], f"strava:{a['id']}", a['distance_km'], w['id']))
-                    used.add(a['id'])
-                    validated += 1
-                    break
-    return validated
-
-
-@app.get('/api/strava/activities')
-@require_auth
-def strava_activities():
-    data = fetch_strava_week(g.user_id)
-    if data is None:
-        # 409 et pas 401 : un 401 ferait purger le JWT cote front
-        return jsonify({'error': 'not_connected'}), 409
-    data['validated_runs'] = _auto_validate_runs(g.user_id, data['activities'])
-    return jsonify(data)
-
-
 @app.get('/api/health')
 def health():
     return jsonify({'ok': True, 'ollama': coach.ollama_available()})
@@ -640,10 +514,8 @@ def process_generation_jobs():
             "SELECT * FROM generation_jobs WHERE status='pending' ORDER BY id LIMIT 5").fetchall()
         for job in jobs:
             try:
-                strava = fetch_strava_week(job['user_id'])
                 plan = coach.ollama_generate_gym_plan(
                     db, job['user_id'],
-                    strava_activities=strava['activities'] if strava else [],
                     mode=job['mode'] if 'mode' in job.keys() else 'gym')
                 target = db.execute(
                     "SELECT id FROM workouts WHERE user_id=? AND status='planned' "
